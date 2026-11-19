@@ -26,6 +26,7 @@ from packages.contracts import (
     WorkflowMessage,
     WorkflowPhase,
     WorkflowRunRead,
+    normalize_task_prompt,
 )
 from services.agent_bridge import AgentRegistry, BaseAgentAdapter
 from services.agent_bridge.streaming import ActivityEvent
@@ -394,6 +395,7 @@ class CollaborativeWorkflowEngine:
                 raise ValueError(f"Task not found: {task_id}")
             task_title, task_desc = task.title, task.description
             task_policy = PolicyMode(task.policy_mode)
+            context_files = task.get_metadata().get("context_files", [])
             inspector_type, worker_type = self.resolve_pair_types(task.assigned_agent)
             inspector_name = self.AGENT_NAMES.get(inspector_type, inspector_type.value)
             worker_name = self.AGENT_NAMES.get(worker_type, worker_type.value)
@@ -418,6 +420,12 @@ class CollaborativeWorkflowEngine:
             raise RuntimeError(f"Both {inspector_name} and {worker_name} adapters must be available for collaboration.")
 
         worktree_dir = self._allocate_worktree(project_root, task_id)
+        formatted_desc = normalize_task_prompt(task_desc, context_files)
+        scope_note = (
+            f"Target File(s) / Folder Scope: {', '.join(context_files)}"
+            if context_files
+            else f"Target Scope: Entire project folder ({worktree_dir})"
+        )
 
         # STAGE 1: READ-ONLY INSPECTION & PROPOSAL (Inspector)
         proposal_text = self._run_stage(
@@ -427,8 +435,9 @@ class CollaborativeWorkflowEngine:
                 task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                 prompt=(
                     f"You are {inspector_name}, the Lead Architect inspecting task: '{task_title}'.\n"
-                    f"Requirements:\n{task_desc}\n\n"
-                    "Analyze the codebase requirements and formulate a structured, concise technical proposal "
+                    f"{scope_note}\n\n"
+                    f"Requirements:\n{formatted_desc}\n\n"
+                    "Analyze the requirements within this scope and formulate a structured, concise technical proposal "
                     f"and execution plan for {worker_name} to review.\n"
                     "If your plan includes any dangerous, destructive, or high-impact actions that require human "
                     "confirmation before execution, include the line 'APPROVAL_REQUIRED: YES' and explain why.\n"
@@ -436,6 +445,7 @@ class CollaborativeWorkflowEngine:
                 ),
                 working_directory=worktree_dir, worktree_name=None,
                 policy_mode=PolicyMode.STRICT, timeout_seconds=300,
+                context_files=context_files,
             ),
         )
         if proposal_text is None:
@@ -448,7 +458,7 @@ class CollaborativeWorkflowEngine:
             AgentExecutionRequest(
                 task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                 prompt=(
-                    f"{inspector_name} has proposed the following technical plan for task '{task_title}':\n"
+                    f"{inspector_name} has proposed the following technical plan for task '{task_title}' ({scope_note}):\n"
                     f"---\n{proposal_text}\n---\n\n"
                     "Review this plan. Do you agree with these steps, or do you have refinements or critiques?\n"
                     "If your plan includes any dangerous, destructive, or high-impact actions that require human "
@@ -459,6 +469,7 @@ class CollaborativeWorkflowEngine:
                 ),
                 working_directory=worktree_dir, worktree_name=None,
                 policy_mode=PolicyMode.STRICT, timeout_seconds=300,
+                context_files=context_files,
             ),
         )
         if negotiation_text is None:
@@ -493,9 +504,10 @@ class CollaborativeWorkflowEngine:
             if attempt == 1:
                 execution_prompt = (
                     f"Consensus reached between {inspector_name} and {worker_name} for '{task_title}'.\n"
+                    f"{scope_note}\n\n"
                     f"Execute the agreed plan directly inside the current working directory ({worktree_dir}):\n"
                     f"---\n{negotiation_text}\n---\n"
-                    "Implement all required code changes, checks, and updates in this directory. "
+                    "Implement all required code changes, fixes, checks, and updates in this directory. "
                     "Do not create or use any other worktree path."
                 )
             else:
@@ -515,6 +527,7 @@ class CollaborativeWorkflowEngine:
                     task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                     prompt=execution_prompt, working_directory=worktree_dir, worktree_name=None,
                     policy_mode=PolicyMode.AUTO_LOW_IMPACT, timeout_seconds=600,
+                    context_files=context_files,
                 ),
             )
             if execution_text is None:
@@ -528,11 +541,15 @@ class CollaborativeWorkflowEngine:
                     task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                     prompt=(
                         f"{worker_name} has finished executing task '{task_title}' (Attempt {attempt}/{self.max_attempts}) "
-                        f"in working directory: {worktree_dir}\n\n"
+                        f"in working directory: {worktree_dir}\n"
+                        f"{scope_note}\n\n"
                         f"Worktree Git Changes & Untracked Files:\n{changes_summary}\n\n"
                         f"{worker_name} Execution Summary:\n{execution_text[:2000]}\n\n"
                         "Inspect the actual files in this working directory and verify whether the implementation is "
-                        "100% accurate, complete, and free of regressions. Do NOT modify files yourself.\n"
+                        "100% accurate, complete, and free of regressions. "
+                        "If this task is fixing an inline pasted code snippet rather than modifying a repository file, "
+                        "verify that the corrected code in the Execution Summary is 100% accurate and complete. "
+                        "Do NOT modify files yourself.\n"
                         "You MUST include an explicit verdict line in your report:\n"
                         "- Write `VERDICT: APPROVED` if all requirements are satisfied and verified in this working directory.\n"
                         "- Write `VERDICT: REJECTED` if any requirement is missing, broken, or failed verification, "
@@ -540,6 +557,7 @@ class CollaborativeWorkflowEngine:
                     ),
                     working_directory=worktree_dir, worktree_name=None,
                     policy_mode=PolicyMode.STRICT, timeout_seconds=300,
+                    context_files=context_files,
                 ),
                 severity="WARNING",
             )

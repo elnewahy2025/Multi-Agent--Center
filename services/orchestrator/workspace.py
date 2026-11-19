@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class WorkspaceManager:
@@ -148,3 +148,59 @@ class WorkspaceManager:
                 "diff": file_diff or "No diff available",
             })
         return files
+
+    @staticmethod
+    def _find_git_root(start_dir: Path) -> Optional[Path]:
+        """Walk upward from start_dir looking for an enclosing .git directory or file."""
+        for d in [start_dir, *start_dir.parents]:
+            if (d / ".git").exists():
+                return d
+        return None
+
+    def resolve_target_path(
+        self,
+        raw_path: Optional[str],
+        context_files: Optional[List[str]] = None,
+    ) -> Tuple[str, List[str]]:
+        """Resolve a user-selected folder or file path into (project_root, relative_context_files)."""
+        repo_root = Path(__file__).resolve().parents[2].resolve()
+        resolved_files: List[str] = list(context_files or [])
+        project_root = repo_root
+
+        if raw_path and raw_path.strip():
+            raw = raw_path.strip()
+            p_raw = Path(raw)
+            candidate = (repo_root / p_raw).resolve() if (not p_raw.is_absolute() and (repo_root / p_raw).exists()) else p_raw.resolve()
+            if candidate.is_file():
+                project_root = self._find_git_root(candidate.parent) or candidate.parent
+                rel = candidate.relative_to(project_root).as_posix()
+                resolved_files.append(rel)
+            elif candidate.is_dir():
+                git_root = self._find_git_root(candidate)
+                if git_root and git_root != candidate:
+                    project_root = git_root
+                    resolved_files.append(candidate.relative_to(git_root).as_posix())
+                else:
+                    project_root = candidate
+            else:
+                resolved_files.append(raw)
+
+        normalized: List[str] = []
+        seen = set()
+        for item in resolved_files:
+            s = (item or "").strip()
+            if not s:
+                continue
+            p_item = Path(s)
+            if p_item.is_absolute():
+                try:
+                    s = p_item.resolve().relative_to(project_root).as_posix()
+                except ValueError:
+                    s = str(p_item)
+            else:
+                s = s.replace("\\", "/")
+            if s not in seen:
+                seen.add(s)
+                normalized.append(s)
+
+        return str(project_root), normalized

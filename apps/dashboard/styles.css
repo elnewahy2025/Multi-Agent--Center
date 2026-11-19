@@ -109,6 +109,76 @@ input[type="text"]:focus, select:focus, textarea:focus {
 }
 .form-checkbox { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; font-size: 0.85rem; }
 
+.prompt-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+.prompt-label-row label { margin-bottom: 0; }
+.code-prompt-box {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  tab-size: 4;
+  resize: vertical;
+}
+.scope-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.45rem;
+}
+.scope-mode-btn {
+  background: #0d1117;
+  color: var(--text-muted);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.scope-mode-btn.active {
+  background: rgba(88, 166, 255, 0.16);
+  color: var(--text-bright);
+  border-color: var(--accent-color);
+  font-weight: 600;
+}
+.scope-input-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.selected-files-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #21262d;
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 0.15rem 0.55rem;
+  font-family: monospace;
+  font-size: 0.73rem;
+  color: #79c0ff;
+}
+.file-chip-folder { color: #7ee787; border-color: rgba(63, 185, 80, 0.4); }
+.file-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0;
+}
+.file-chip-remove:hover { color: #f85149; }
+
 .btn {
   display: inline-flex;
   align-items: center;
