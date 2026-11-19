@@ -212,3 +212,63 @@ class TaskOrchestrator:
             session.add(audit)
 
         return result
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel an active task and terminate its running processes."""
+        with get_db_session() as session:
+            task = session.query(TaskModel).filter_by(id=task_id).first()
+            if not task:
+                return False
+
+            task.status = TaskStatus.CANCELLED.value
+            task.updated_at = datetime.utcnow()
+
+            # Find and cancel running agent runs
+            runs = session.query(AgentRunModel).filter_by(task_id=task_id, status="RUNNING").all()
+            for r in runs:
+                r.status = "CANCELLED"
+                r.error_reason = "Cancelled by operator"
+                r.completed_at = datetime.utcnow()
+                if task.assigned_agent:
+                    adapter = self.registry.get_adapter(AgentType(task.assigned_agent))
+                    if adapter:
+                        adapter.cancel(r.id)
+
+            # Cancel associated workflow runs if any
+            from services.orchestrator.db import WorkflowRunModel
+            wf = session.query(WorkflowRunModel).filter_by(task_id=task_id, status="RUNNING").first()
+            if wf:
+                wf.status = "CANCELLED"
+                wf.updated_at = datetime.utcnow()
+
+            audit = AuditLogModel(
+                task_id=task_id,
+                event_type="TASK_CANCELLED",
+                message="Task execution was stopped by operator.",
+            )
+            session.add(audit)
+            return True
+
+    def recover_stale_tasks(self) -> int:
+        """Scan for orphan tasks left in RUNNING state after an ungraceful server shutdown."""
+        with get_db_session() as session:
+            stale_tasks = session.query(TaskModel).filter_by(status="RUNNING").all()
+            count = len(stale_tasks)
+            for t in stale_tasks:
+                t.status = "FAILED"
+                t.updated_at = datetime.utcnow()
+
+                from services.orchestrator.db import WorkflowRunModel
+                wf = session.query(WorkflowRunModel).filter_by(task_id=t.id, status="RUNNING").first()
+                if wf:
+                    wf.status = "FAILED"
+                    wf.verification_report = "Interrupted by server restart or process termination."
+                    wf.updated_at = datetime.utcnow()
+
+                audit = AuditLogModel(
+                    task_id=t.id,
+                    event_type="TASK_INTERRUPTED",
+                    message="Task execution interrupted by server restart.",
+                )
+                session.add(audit)
+            return count

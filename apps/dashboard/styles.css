@@ -130,6 +130,15 @@ input[type="text"]:focus, select:focus, textarea:focus {
 .btn-run:hover { background: #388bfd; }
 .btn-team { background: #8957e5; color: white; padding: 0.25rem 0.6rem; font-size: 0.75rem; margin-left: 0.3rem; border-radius: 4px; }
 .btn-team:hover { background: #a371f7; }
+.btn-stop { background: #da3633; color: white; border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 0.72rem; margin-left: 0.3rem; }
+.btn-stop:hover { background: #b62324; }
+.btn-approve { background: #238636; color: white; padding: 0.25rem 0.6rem; font-size: 0.75rem; border-radius: 4px; margin-right: 0.4rem; }
+.btn-approve:hover { background: #2ea043; }
+.btn-deny { background: #da3633; color: white; padding: 0.25rem 0.6rem; font-size: 0.75rem; border-radius: 4px; }
+.btn-deny:hover { background: #b62324; }
+.approval-item { padding: 0.75rem; border: 1px solid var(--card-border); border-radius: 6px; margin-bottom: 0.6rem; background: #1c2128; }
+.approval-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem; }
+.approval-actions { margin-top: 0.6rem; display: flex; gap: 0.4rem; }
 
 /* Collaborative bilateral message bubbles */
 .msg-bubble {
