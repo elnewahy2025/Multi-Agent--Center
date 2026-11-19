@@ -13,6 +13,9 @@ This document separates owner-approved choices from proposals and unresolved que
 | ADR-005 | Use the currently created directory structure as the initial foundation and allow additions later. | Owner supplied and created the structure. |
 | ADR-006 | Initial agent-bridge directories are `antigravity` and `opencode`. | Present in the verified project structure; this does not assert that either adapter is implemented. |
 | ADR-007 | Continually track and commit verified project milestones to source control. | Explicitly directed by user ("always save our progress"). |
+| ADR-008 | PostgreSQL 18 on port 5433 selected for Command Center persistence. | Dedicated database `command_center` created and verified. |
+| ADR-009 | OpenCode SQLite state protected via atomic SQLite online backup. | Verified backup script `scripts/backup_opencode.py` created and tested with PRAGMA quick_check passing. |
+| ADR-010 | OpenCode CLI conflict resolved via user-local wrapper in `.local\bin`. | Prioritizes Desktop CLI 2.3.2 over obsolete npm 1.19.6 without destructive uninstallation. |
 
 ## Verified environment facts
 
