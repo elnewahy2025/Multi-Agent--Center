@@ -33,6 +33,7 @@ async function initDashboard() {
     fetchAgents(),
     fetchTasks(),
     fetchApprovals(),
+    fetchErrors(),
     fetchAudit(),
   ]);
 }
@@ -42,6 +43,7 @@ async function refreshData() {
     fetchHealth(),
     fetchTasks(),
     fetchApprovals(),
+    fetchErrors(),
     fetchAudit(),
   ]);
   if (activeModalTaskId) {
@@ -274,8 +276,18 @@ async function loadTaskDetails(taskId) {
         <strong>Verification:</strong> ${workflow.is_verified ? '<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by Antigravity</span>' : '<span style="color:#d29922;">In Progress...</span>'}
       `;
 
+      let alertHtml = "";
+      if (workflow.status === "FAILED") {
+        alertHtml = `
+          <div style="background:rgba(218,54,51,0.18); border:1px solid #da3633; border-radius:6px; padding:0.75rem 1rem; color:#f85149; margin-bottom:0.75rem;">
+            <strong>🚨 Workflow Execution Halted with Error:</strong>
+            <div style="margin-top:0.25rem; font-size:0.8rem; color:#f0f6fc;">${escapeHtml(workflow.verification_report || 'An error occurred during agent execution.')}</div>
+          </div>
+        `;
+      }
+
       if (workflow.messages && workflow.messages.length > 0) {
-        let html = `<div style="display:flex; flex-direction:column; gap:0.6rem;">`;
+        let html = alertHtml + `<div style="display:flex; flex-direction:column; gap:0.6rem;">`;
         workflow.messages.forEach((msg) => {
           const isAntigravity = msg.sender === "ANTIGRAVITY";
           const bubbleClass = isAntigravity ? "msg-antigravity" : "msg-opencode";
@@ -294,7 +306,7 @@ async function loadTaskDetails(taskId) {
         html += `</div>`;
         content.innerHTML = html;
       } else {
-        content.innerHTML = `
+        content.innerHTML = alertHtml + `
           <div style="padding:1rem; text-align:center; color:#58a6ff;">
             <p><strong>[Stage 1: INSPECTION]</strong> Google Antigravity is currently inspecting your codebase and drafting the technical proposal...</p>
             <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.4rem;">This screen refreshes live automatically.</p>
@@ -469,6 +481,80 @@ async function fetchAudit() {
     `).join("");
   } catch (err) {
     // Silent fail for audit polling
+  }
+}
+
+async function fetchErrors() {
+  const container = document.getElementById("errorCenterList");
+  const badge = document.getElementById("errorCountBadge");
+  const pill = document.getElementById("errorPill");
+  if (!container) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/errors?unresolved_only=true`);
+    const errors = await res.json();
+
+    if (pill) {
+      pill.textContent = `Errors: ${errors.length}`;
+      if (errors.length > 0) {
+        pill.className = "status-pill status-error";
+      } else {
+        pill.className = "status-pill status-healthy";
+      }
+    }
+
+    if (badge) {
+      badge.textContent = `${errors.length} Active Error${errors.length === 1 ? '' : 's'}`;
+      badge.className = errors.length > 0 ? "badge badge-error" : "badge badge-success";
+    }
+
+    if (errors.length === 0) {
+      container.innerHTML = `<div class="empty-state">✓ All systems operational. No active errors or agent failures.</div>`;
+      return;
+    }
+
+    container.innerHTML = errors.map((err) => {
+      const severityClass = `severity-${err.severity || 'ERROR'}`;
+      const timeStr = new Date(err.created_at).toLocaleTimeString();
+      return `
+        <div class="error-entry ${severityClass}">
+          <div class="error-entry-header">
+            <div class="error-title-row">
+              <span class="error-source-tag">[${escapeHtml(err.source)}]</span>
+              <span class="badge ${err.severity === 'CRITICAL' ? 'badge-error' : 'badge-warning'}">${err.severity}</span>
+              <span class="error-title">${escapeHtml(err.title)}</span>
+            </div>
+            <button class="btn-dismiss" onclick="resolveError(${err.id})" title="Dismiss error notification">Dismiss ✕</button>
+          </div>
+          <div class="error-message">${escapeHtml(err.message)}</div>
+          ${err.stderr ? `<pre class="error-stderr-box">${escapeHtml(err.stderr)}</pre>` : ''}
+          <div class="error-entry-footer">
+            <span>Task ID: <code>${err.task_id || 'System'}</code> &bull; ${timeStr}</span>
+            ${err.task_id ? `<button class="btn btn-sm btn-view" onclick="viewTaskDetails('${err.task_id}', 'chat')">Inspect Task ➔</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (err) {
+    // Silent fail for polling
+  }
+}
+
+async function resolveError(errorId) {
+  try {
+    await fetch(`${API_BASE}/errors/${errorId}/resolve`, { method: "POST" });
+    await fetchErrors();
+  } catch (e) {
+    console.error("Failed to dismiss error:", e);
+  }
+}
+
+async function clearAllErrors() {
+  try {
+    await fetch(`${API_BASE}/errors/clear`, { method: "POST" });
+    await fetchErrors();
+  } catch (e) {
+    console.error("Failed to clear errors:", e);
   }
 }
 

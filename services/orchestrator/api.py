@@ -17,6 +17,7 @@ from packages.contracts import (
 from services.orchestrator.db import (
     ApprovalModel,
     AuditLogModel,
+    ErrorLogModel,
     TaskModel,
     WorkflowRunModel,
     get_db_session,
@@ -297,6 +298,77 @@ def list_audit_trail(limit: int = 50) -> List[Dict[str, Any]]:
             }
             for log in logs
         ]
+
+
+@app.get("/errors", response_model=List[Dict[str, Any]])
+def list_errors(unresolved_only: bool = True, limit: int = 50) -> List[Dict[str, Any]]:
+    """Retrieve active and recent errors for the Diagnostics & Error Center."""
+    with get_db_session() as session:
+        query = session.query(ErrorLogModel).order_by(ErrorLogModel.created_at.desc())
+        if unresolved_only:
+            query = query.filter_by(resolved=False)
+        errors = query.limit(limit).all()
+        return [
+            {
+                "id": e.id,
+                "task_id": e.task_id,
+                "run_id": e.run_id,
+                "source": e.source,
+                "severity": e.severity,
+                "title": e.title,
+                "message": e.message,
+                "stderr": e.stderr,
+                "resolved": e.resolved,
+                "created_at": e.created_at.isoformat(),
+            }
+            for e in errors
+        ]
+
+
+@app.post("/errors/{error_id}/resolve")
+def resolve_error(error_id: int) -> Dict[str, Any]:
+    """Dismiss or resolve a specific error message."""
+    with get_db_session() as session:
+        err = session.query(ErrorLogModel).filter_by(id=error_id).first()
+        if not err:
+            raise HTTPException(status_code=404, detail="Error record not found")
+        err.resolved = True
+    return {"message": "Error dismissed", "id": error_id}
+
+
+@app.post("/errors/clear")
+def clear_errors() -> Dict[str, Any]:
+    """Dismiss all pending error messages in the Error Center."""
+    with get_db_session() as session:
+        session.query(ErrorLogModel).update({ErrorLogModel.resolved: True})
+    return {"message": "All error notifications cleared"}
+
+
+@app.get("/diagnostics")
+def get_diagnostics() -> Dict[str, Any]:
+    """Return live system health diagnostics, detected CLI paths, and error metrics."""
+    agents = orchestrator.registry.get_available_agents()
+    with get_db_session() as session:
+        active_errors = session.query(ErrorLogModel).filter_by(resolved=False).count()
+        total_tasks = session.query(TaskModel).count()
+        failed_tasks = session.query(TaskModel).filter_by(status="FAILED").count()
+    return {
+        "status": "healthy" if active_errors == 0 else "degraded",
+        "active_errors": active_errors,
+        "total_tasks": total_tasks,
+        "failed_tasks": failed_tasks,
+        "database": "postgresql (localhost:5433)",
+        "agents": [
+            {
+                "type": a.agent_type.value,
+                "name": a.name,
+                "version": a.version,
+                "executable": a.executable_path,
+                "available": a.is_available,
+            }
+            for a in agents
+        ],
+    }
 
 
 # Mount the operator dashboard static UI at root

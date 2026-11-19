@@ -340,3 +340,102 @@ input[type="text"]:focus, select:focus, textarea:focus {
 .diff-line.diff-del { background: rgba(248, 81, 73, 0.15); color: #f85149; }
 .diff-line.diff-hdr { background: rgba(56, 139, 253, 0.15); color: #79c0ff; font-weight: 600; }
 .diff-line.diff-ctx { color: var(--text-muted); }
+
+/* Error Messages & Diagnostics Center */
+.badge-error { background: rgba(248, 81, 73, 0.25); color: #f85149; border: 1px solid rgba(248, 81, 73, 0.5); }
+.badge-success { background: rgba(63, 185, 80, 0.2); color: #3fb950; border: 1px solid rgba(63, 185, 80, 0.4); }
+.status-error { color: #f85149; border-color: rgba(248, 81, 73, 0.4); }
+
+.error-center-card {
+  max-height: 380px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.error-entry {
+  background: #1c2128;
+  border-left: 4px solid var(--danger-color);
+  border-top: 1px solid var(--card-border);
+  border-right: 1px solid var(--card-border);
+  border-bottom: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.error-entry.severity-WARNING {
+  border-left-color: var(--warning-color);
+}
+.error-entry.severity-CRITICAL {
+  border-left-color: #ff3838;
+  background: rgba(218, 54, 51, 0.08);
+}
+.error-entry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.error-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.error-source-tag {
+  font-family: monospace;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  background: #21262d;
+  color: #79c0ff;
+  border-radius: 4px;
+}
+.error-title {
+  font-weight: 600;
+  color: var(--text-bright);
+  font-size: 0.88rem;
+}
+.error-message {
+  font-size: 0.8rem;
+  color: #c9d1d9;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.error-stderr-box {
+  background: #0d1117;
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: #f85149;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-top: 0.3rem;
+}
+.error-entry-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 0.3rem;
+}
+.btn-dismiss {
+  background: transparent;
+  border: 1px solid var(--card-border);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-dismiss:hover {
+  background: #21262d;
+  color: var(--text-bright);
+}
