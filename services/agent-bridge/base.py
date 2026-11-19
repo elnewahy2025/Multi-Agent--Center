@@ -81,7 +81,7 @@ class BaseAgentAdapter(abc.ABC):
             return self._result(request, TaskStatus.FAILED, 1, "", str(exc), 0.0, str(exc), None)
 
         self._active_processes[request.run_id] = process
-        emit(ActivityEvent(key="process", kind="system", status="running",
+        emit(ActivityEvent(key="process-start", kind="system", status="running",
                            title=f"{descriptor.name} started (pid {process.pid})"))
 
         def _drain_stderr() -> None:
@@ -151,7 +151,7 @@ class BaseAgentAdapter(abc.ABC):
         elif exit_code != 0:
             status, reason = TaskStatus.FAILED, f"Process exited with non-zero code {exit_code}"
 
-        emit(ActivityEvent(key="process", kind="system",
+        emit(ActivityEvent(key="process-end", kind="system",
                            status="done" if status == TaskStatus.COMPLETED else "failed",
                            title=f"{descriptor.name} finished — exit {exit_code} in {duration:.1f}s",
                            content=clip(stderr_text) if status != TaskStatus.COMPLETED else None,

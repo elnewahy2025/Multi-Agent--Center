@@ -92,6 +92,47 @@ class AntigravityAdapter(BaseAgentAdapter):
             f"{request.timeout_seconds}s",
         ]
 
+        try:
+            wd = Path(request.working_directory).resolve()
+        except OSError:
+            wd = None
+
+        add_dirs: List[str] = []
+        seen = set()
+
+        def _maybe_add_dir(raw_dir: str) -> None:
+            try:
+                p = Path(raw_dir).resolve()
+            except OSError:
+                return
+            if not p.exists():
+                return
+            target = p if p.is_dir() else p.parent
+            if wd is not None and target == wd:
+                return
+            if wd is not None:
+                try:
+                    target.relative_to(wd)
+                    return
+                except ValueError:
+                    pass
+            s = str(target)
+            if s not in seen:
+                seen.add(s)
+                add_dirs.append(s)
+
+        for raw_dir in (request.extra_flags or {}).get("add_dirs", []) or []:
+            if isinstance(raw_dir, str) and raw_dir.strip():
+                _maybe_add_dir(raw_dir.strip())
+
+        for cf in request.context_files or []:
+            p_cf = Path(cf)
+            if p_cf.is_absolute():
+                _maybe_add_dir(cf)
+
+        for d in add_dirs:
+            cmd.extend(["--add-dir", d])
+
         if request.policy_mode in (PolicyMode.AUTO_LOW_IMPACT, PolicyMode.ALLOW_ALL):
             cmd.append("--dangerously-skip-permissions")
 

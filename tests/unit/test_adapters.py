@@ -193,6 +193,7 @@ class TestAdapters(unittest.TestCase):
 
         adapter = _DummyAdapter()
         with tempfile.TemporaryDirectory() as tmp:
+            events_seen = []
             # Actively streaming past 1s triggers grace window and completes cleanly
             stream_code = (
                 "import sys, time\n"
@@ -200,13 +201,19 @@ class TestAdapters(unittest.TestCase):
                 "    print(f'TEXT:chunk-{i}', flush=True)\n"
                 "    time.sleep(0.25)\n"
             )
-            res_ok = adapter.execute(AgentExecutionRequest(
-                task_id="tsk_grace", run_id="run_grace", prompt=stream_code,
-                working_directory=tmp, timeout_seconds=1,
-            ))
+            res_ok = adapter.execute(
+                AgentExecutionRequest(
+                    task_id="tsk_grace", run_id="run_grace", prompt=stream_code,
+                    working_directory=tmp, timeout_seconds=1,
+                ),
+                on_event=events_seen.append,
+            )
             self.assertEqual(res_ok.status, TaskStatus.COMPLETED)
             self.assertEqual(res_ok.exit_code, 0)
             self.assertIn("chunk-5", res_ok.structured_output["final_text"])
+            keys = [ev.key for ev in events_seen]
+            self.assertEqual(keys[0], "process-start")
+            self.assertEqual(keys[-1], "process-end")
 
             # Silent hanging process still hits hard timeout without grace
             hang_code = "import time; time.sleep(5)"
@@ -216,6 +223,52 @@ class TestAdapters(unittest.TestCase):
             ))
             self.assertEqual(res_to.status, TaskStatus.TIMED_OUT)
             self.assertEqual(res_to.exit_code, 124)
+
+    def test_antigravity_add_dir_and_stream_error_parsing(self):
+        from pathlib import Path
+        from services.agent_bridge.antigravity.stream_parser import parse_antigravity_line
+
+        adapter = AntigravityAdapter()
+        with tempfile.TemporaryDirectory() as tmp:
+            root_dir = Path(tmp) / "root"
+            extra_dir = Path(tmp) / "extra_repo"
+            ctx_dir = Path(tmp) / "ctx_repo"
+            root_dir.mkdir()
+            extra_dir.mkdir()
+            ctx_dir.mkdir()
+            ctx_file = ctx_dir / "package.json"
+            ctx_file.write_text("{}", encoding="utf-8")
+
+            req = AgentExecutionRequest(
+                task_id="tsk_add_dir", run_id="run_add_dir", prompt="Inspect",
+                working_directory=str(root_dir),
+                context_files=[str(ctx_file)],
+                extra_flags={"add_dirs": [str(extra_dir), str(root_dir)]},
+            )
+            cmd = adapter.build_command(req)
+            add_vals = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "--add-dir"]
+            self.assertIn(str(extra_dir.resolve()), add_vals)
+            self.assertIn(str(ctx_dir.resolve()), add_vals)
+            self.assertNotIn(str(root_dir.resolve()), add_vals)
+
+        err_tool = (
+            '{"event":"step_update","step_update":{"step_index":2,"state":"ERROR","step_type":"tool",'
+            '"tool_name":"read_file","duration_seconds":0.9,"tool_info":{"name":"read_file",'
+            '"parameters":{"Path":"package.json"},"error":{"type":"TOOL_ERROR","message":"permission check failed"}}}}'
+        )
+        evs_err = parse_antigravity_line(err_tool)
+        self.assertEqual(len(evs_err), 1)
+        self.assertEqual(evs_err[0].status, "failed")
+        self.assertEqual(evs_err[0].content, "permission check failed")
+
+        denied_result = (
+            '{"event":"result","result":{"status":"SUCCESS","response":"",'
+            '"denied_actions":[{"action":"read_file","display_name":"ReadFile"}]}}'
+        )
+        evs_denied = parse_antigravity_line(denied_result)
+        self.assertEqual([e.key for e in evs_denied], ["final", "denied-actions"])
+        self.assertEqual(evs_denied[1].kind, "error")
+        self.assertIn("ReadFile", evs_denied[1].content)
 
 
 if __name__ == "__main__":
