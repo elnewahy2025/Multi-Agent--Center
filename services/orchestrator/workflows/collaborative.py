@@ -10,15 +10,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from packages.contracts import (
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentType,
+    ApprovalDecision,
     PolicyMode,
     TaskStatus,
     WorkflowMessage,
@@ -26,8 +28,10 @@ from packages.contracts import (
     WorkflowRunRead,
 )
 from services.agent_bridge import AgentRegistry, BaseAgentAdapter
+from services.agent_bridge.streaming import ActivityEvent
 from services.orchestrator.db import (
     AgentRunModel,
+    ApprovalModel,
     AuditLogModel,
     ErrorLogModel,
     TaskModel,
@@ -49,10 +53,14 @@ class CollaborativeWorkflowEngine:
         registry: Optional[AgentRegistry] = None,
         workspace_mgr: Optional[WorkspaceManager] = None,
         max_attempts: int = 2,
+        poll_interval_seconds: float = 0.5,
+        approval_timeout_seconds: int = 1800,
     ) -> None:
         self.registry = registry or AgentRegistry()
         self.workspace_mgr = workspace_mgr or WorkspaceManager()
         self.max_attempts = max_attempts
+        self.poll_interval_seconds = poll_interval_seconds
+        self.approval_timeout_seconds = approval_timeout_seconds
 
     def _extract_text_content(
         self,
@@ -132,6 +140,110 @@ class CollaborativeWorkflowEngine:
         chunks = [f"### [{f['status']}] {f['path']}\n{f['diff']}" for f in files]
         combined = "\n\n".join(chunks)
         return combined[:4000] if len(combined) > 4000 else combined
+
+    @staticmethod
+    def _detect_high_risk_plan(
+        task_desc: str, proposal: str, negotiation: str, policy_mode: PolicyMode,
+    ) -> Optional[str]:
+        """Detect policy or plan triggers requiring human confirmation before execution."""
+        if policy_mode in (PolicyMode.ASK, PolicyMode.STRICT):
+            return (
+                f"Task policy mode is '{policy_mode.value}', requiring human confirmation "
+                "before Stage 3 file modifications."
+            )
+        combined = f"{task_desc}\n{proposal}\n{negotiation}"
+        if re.search(r"approval[_\s-]*required\s*:\s*yes", combined, re.IGNORECASE):
+            return (
+                "Agents flagged high-impact or approval-gated changes "
+                "(APPROVAL_REQUIRED: YES) in the technical plan."
+            )
+        danger = re.search(
+            r"\b(git\s+push|git\s+reset\s+--hard|git\s+clean\s+-fd|rm\s+-rf|"
+            r"remove-item\s+.*-recurse|drop\s+table|truncate\s+table|delete\s+from|force-push)\b"
+            r"|(?:^|\s)(--force)(?=\s|$)",
+            combined,
+            re.IGNORECASE,
+        )
+        if danger:
+            matched = (danger.group(1) or danger.group(2) or "").strip()
+            return (
+                f"Plan references high-impact operation ('{matched}'), requiring human approval "
+                "before execution."
+            )
+        return None
+
+    def _request_and_wait_for_approval(
+        self, task_id: str, workflow_id: str, action_type: str,
+        description: str, command_or_path: str, risk_level: str = "HIGH",
+    ) -> Tuple[ApprovalDecision, Optional[str]]:
+        """Pause workflow in AWAITING_APPROVAL and wait until the operator decides."""
+        approval_id = f"apr_{uuid.uuid4().hex[:10]}"
+        with get_db_session() as session:
+            session.add(ApprovalModel(
+                id=approval_id, task_id=task_id, run_id=workflow_id, action_type=action_type,
+                command_or_path=command_or_path, description=description, risk_level=risk_level,
+                decision=ApprovalDecision.PENDING.value,
+            ))
+            t = session.query(TaskModel).filter_by(id=task_id).first()
+            if t:
+                t.status, t.updated_at = TaskStatus.AWAITING_APPROVAL.value, datetime.utcnow()
+            wf = session.query(WorkflowRunModel).filter_by(id=workflow_id).first()
+            if wf:
+                wf.status, wf.updated_at = TaskStatus.AWAITING_APPROVAL.value, datetime.utcnow()
+            session.add(AuditLogModel(
+                task_id=task_id, run_id=workflow_id, event_type="APPROVAL_REQUESTED",
+                message=f"[{action_type}] Waiting for human decision: {description}",
+            ))
+
+        sink = EventSink(task_id=task_id, run_id=workflow_id, agent="SYSTEM", phase=action_type)
+        sink(ActivityEvent(
+            key=f"apr-{approval_id}", kind="system", status="running",
+            title=f"⏸ Waiting for human decision ({action_type}): {description}",
+        ))
+
+        deadline = time.monotonic() + self.approval_timeout_seconds
+        while time.monotonic() < deadline:
+            with get_db_session() as session:
+                t = session.query(TaskModel).filter_by(id=task_id).first()
+                apr = session.query(ApprovalModel).filter_by(id=approval_id).first()
+                if t and t.status == TaskStatus.CANCELLED.value:
+                    if apr and apr.decision == ApprovalDecision.PENDING.value:
+                        apr.decision = ApprovalDecision.DENIED.value
+                        apr.reason = "Task cancelled"
+                        apr.decided_at = datetime.utcnow()
+                    sink(ActivityEvent(
+                        key=f"apr-{approval_id}", kind="system", status="failed",
+                        title=f"⏹ Cancelled while waiting for human decision ({action_type})",
+                    ))
+                    return ApprovalDecision.DENIED, "Task cancelled"
+
+                if apr and apr.decision != ApprovalDecision.PENDING.value:
+                    dec = ApprovalDecision(apr.decision)
+                    reason = apr.reason
+                    if dec == ApprovalDecision.APPROVED:
+                        if t:
+                            t.status, t.updated_at = TaskStatus.RUNNING.value, datetime.utcnow()
+                        wf = session.query(WorkflowRunModel).filter_by(id=workflow_id).first()
+                        if wf:
+                            wf.status, wf.updated_at = "RUNNING", datetime.utcnow()
+                    note_txt = f" — Instructions: {reason}" if reason else ""
+                    sink(ActivityEvent(
+                        key=f"apr-{approval_id}", kind="system",
+                        status="done" if dec == ApprovalDecision.APPROVED else "failed",
+                        title=f"Operator {dec.value} ({action_type}){note_txt}",
+                    ))
+                    return dec, reason
+            time.sleep(self.poll_interval_seconds)
+
+        with get_db_session() as session:
+            apr = session.query(ApprovalModel).filter_by(id=approval_id).first()
+            if apr and apr.decision == ApprovalDecision.PENDING.value:
+                apr.decision, apr.reason, apr.decided_at = ApprovalDecision.DENIED.value, "Approval timed out", datetime.utcnow()
+        sink(ActivityEvent(
+            key=f"apr-{approval_id}", kind="system", status="failed",
+            title=f"⏱ Approval timed out ({action_type})",
+        ))
+        return ApprovalDecision.DENIED, "Approval timed out"
 
     def _record_error(
         self, task_id: str, workflow_id: str, source: str, title: str,
@@ -260,6 +372,7 @@ class CollaborativeWorkflowEngine:
             if not task:
                 raise ValueError(f"Task not found: {task_id}")
             task_title, task_desc = task.title, task.description
+            task_policy = PolicyMode(task.policy_mode)
             project_root = (
                 task.project.root_path
                 if (task.project and task.project.root_path)
@@ -293,6 +406,8 @@ class CollaborativeWorkflowEngine:
                     f"Requirements:\n{task_desc}\n\n"
                     "Analyze the codebase requirements and formulate a structured, concise technical proposal "
                     "and execution plan for OpenCode to review.\n"
+                    "If your plan includes any dangerous, destructive, or high-impact actions that require human "
+                    "confirmation before execution, include the line 'APPROVAL_REQUIRED: YES' and explain why.\n"
                     "IMPORTANT: This is Stage 1 (read-only inspection). Do NOT modify, create, or delete any files."
                 ),
                 working_directory=worktree_dir, worktree_name=None,
@@ -312,6 +427,8 @@ class CollaborativeWorkflowEngine:
                     f"Antigravity has proposed the following technical plan for task '{task_title}':\n"
                     f"---\n{proposal_text}\n---\n\n"
                     "Review this plan. Do you agree with these steps, or do you have refinements or critiques?\n"
+                    "If your plan includes any dangerous, destructive, or high-impact actions that require human "
+                    "confirmation before execution, include the line 'APPROVAL_REQUIRED: YES' and explain why.\n"
                     "IMPORTANT: This is Stage 2 (read-only peer review & negotiation). Do NOT modify, create, or "
                     "delete any files in this stage—only review the plan and state 'AGREED' with the locked "
                     "execution steps or list your proposed refinements."
@@ -323,9 +440,32 @@ class CollaborativeWorkflowEngine:
         if negotiation_text is None:
             return self.get_workflow_run(workflow_id)  # type: ignore
 
-        # STAGES 3 <-> 4: BOUNDED EXECUTION & VERIFICATION REWORK LOOP
-        last_verification_text = ""
-        for attempt in range(1, self.max_attempts + 1):
+        # GATE A: PRE-EXECUTION HUMAN APPROVAL FOR POLICY OR HIGH-IMPACT PLANS
+        risk_reason = self._detect_high_risk_plan(task_desc, proposal_text, negotiation_text, task_policy)
+        if risk_reason:
+            decision, user_note = self._request_and_wait_for_approval(
+                task_id, workflow_id, "PRE_EXECUTION_APPROVAL", risk_reason, worktree_dir, "HIGH",
+            )
+            if decision != ApprovalDecision.APPROVED:
+                halt_msg = f"🛑 Execution halted: Operator denied pre-execution approval ({user_note or decision.value})."
+                self._record_message(
+                    workflow_id, AgentType.ANTIGRAVITY, AgentType.OPENCODE, WorkflowPhase.NEGOTIATION, halt_msg,
+                )
+                self._update_phase(workflow_id, WorkflowPhase.FAILED if user_note == "Approval timed out" else WorkflowPhase.NEGOTIATION,
+                                   status="FAILED" if user_note == "Approval timed out" else "CANCELLED",
+                                   report=halt_msg)
+                with get_db_session() as session:
+                    t = session.query(TaskModel).filter_by(id=task_id).first()
+                    if t:
+                        t.status = TaskStatus.FAILED.value if user_note == "Approval timed out" else TaskStatus.CANCELLED.value
+                        t.updated_at = datetime.utcnow()
+                return self.get_workflow_run(workflow_id)  # type: ignore
+            if user_note:
+                negotiation_text += f"\n\nOperator Approval Instructions:\n{user_note}"
+
+        # STAGES 3 <-> 4: BOUNDED EXECUTION & VERIFICATION REWORK LOOP + GATE B ESCALATION
+        attempt, operator_granted_extra, last_verification_text = 1, False, ""
+        while True:
             if attempt == 1:
                 execution_prompt = (
                     f"Consensus reached between Antigravity and OpenCode for '{task_title}'.\n"
@@ -393,7 +533,7 @@ class CollaborativeWorkflowEngine:
                         t_done.worktree_path = worktree_dir
                     session.add(AuditLogModel(
                         task_id=task_id, event_type="WORKFLOW_COMPLETED",
-                        message=f"Collaborative bilateral workflow approved by Antigravity (Attempt {attempt}/{self.max_attempts}).",
+                        message=f"Collaborative bilateral workflow approved by Antigravity (Attempt {attempt}).",
                     ))
                 return self.get_workflow_run(workflow_id)  # type: ignore
 
@@ -404,17 +544,33 @@ class CollaborativeWorkflowEngine:
                         task_id=task_id, run_id=workflow_id, event_type="WORKFLOW_REWORK_REQUESTED",
                         message=f"Antigravity rejected attempt {attempt}/{self.max_attempts}; returning to OpenCode for fixes.",
                     ))
-            else:
-                self._record_error(
-                    task_id, workflow_id, "ANTIGRAVITY_VERIFICATION",
-                    f"Verification Rejected After {self.max_attempts} Attempts",
-                    "Antigravity rejected the implementation. Inspect the task verification report for required fixes.",
-                    stderr=verification_text[:2000], severity="ERROR",
-                )
-                self._fail_workflow(workflow_id, task_id, verification_text)
-                return self.get_workflow_run(workflow_id)  # type: ignore
+                attempt += 1
+                continue
 
-        return self.get_workflow_run(workflow_id)  # type: ignore
+            if not operator_granted_extra:
+                decision, user_note = self._request_and_wait_for_approval(
+                    task_id, workflow_id, "UNRESOLVED_ISSUES_DECISION",
+                    f"Antigravity still reported unresolved issues after {attempt} attempt(s). "
+                    "Approve (with optional instructions) to run another fix cycle, or Deny to stop.",
+                    worktree_dir, "HIGH",
+                )
+                if decision == ApprovalDecision.APPROVED:
+                    operator_granted_extra = True
+                    if user_note:
+                        last_verification_text += f"\n\nOperator Approval Instructions:\n{user_note}"
+                    attempt += 1
+                    continue
+                if user_note == "Task cancelled":
+                    return self.get_workflow_run(workflow_id)  # type: ignore
+
+            self._record_error(
+                task_id, workflow_id, "ANTIGRAVITY_VERIFICATION",
+                f"Verification Rejected After {attempt} Attempts",
+                "Antigravity rejected the implementation. Inspect the task verification report for required fixes.",
+                stderr=verification_text[:2000], severity="ERROR",
+            )
+            self._fail_workflow(workflow_id, task_id, verification_text)
+            return self.get_workflow_run(workflow_id)  # type: ignore
 
     def get_workflow_run(self, workflow_id: str) -> Optional[WorkflowRunRead]:
         """Fetch full workflow run details and message transcript."""
