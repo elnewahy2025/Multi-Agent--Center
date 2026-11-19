@@ -1,7 +1,7 @@
 """FastAPI application for the AI Coding Command Center."""
 
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from packages.contracts import (
@@ -109,13 +109,44 @@ def get_task(task_id: str) -> TaskRead:
     return task
 
 
-@app.post("/tasks/{task_id}/execute", response_model=AgentExecutionResult)
-def execute_task(task_id: str) -> AgentExecutionResult:
-    """Trigger execution of a submitted task."""
-    try:
-        return orchestrator.execute_task(task_id)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+@app.post("/tasks/{task_id}/execute")
+def execute_task(task_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """Trigger background execution of a submitted task."""
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Dispatch to background task so the HTTP request returns immediately
+    background_tasks.add_task(orchestrator.execute_task, task_id)
+    return {
+        "status": "RUNNING",
+        "task_id": task_id,
+        "message": "Task dispatched to agent in background",
+    }
+
+
+@app.get("/tasks/{task_id}/runs")
+def get_task_runs(task_id: str) -> List[Dict[str, Any]]:
+    """Retrieve runs and output logs for a specific task."""
+    from services.orchestrator.db import AgentRunModel
+
+    with get_db_session() as session:
+        runs = session.query(AgentRunModel).filter_by(task_id=task_id).order_by(AgentRunModel.started_at.desc()).all()
+        return [
+            {
+                "id": r.id,
+                "agent_type": r.agent_type,
+                "status": r.status,
+                "exit_code": r.exit_code,
+                "duration_seconds": r.duration_seconds,
+                "error_reason": r.error_reason,
+                "stdout": r.stdout or "",
+                "stderr": r.stderr or "",
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            }
+            for r in runs
+        ]
 
 
 @app.get("/approvals", response_model=List[Dict[str, Any]])

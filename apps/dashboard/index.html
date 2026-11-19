@@ -133,6 +133,20 @@
     </section>
   </main>
 
+  <!-- Output Modal -->
+  <div class="modal-overlay" id="outputModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modalTitle">Agent Execution Details</h3>
+        <button class="btn btn-sm btn-secondary" id="btnCloseModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="modalMeta"></div>
+        <pre class="output-terminal" id="modalContent">No output yet...</pre>
+      </div>
+    </div>
+  </div>
+
   <footer class="footer">
     <p>AI Coding Command Center v1.0.0 &bull; Local PostgreSQL 18 &bull; Windows 11</p>
   </footer>
