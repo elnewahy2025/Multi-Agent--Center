@@ -45,8 +45,11 @@ collab_engine = CollaborativeWorkflowEngine()
 
 @app.on_event("startup")
 def startup_event():
-    """Ensure database schema is ready on startup."""
+    """Ensure database schema is ready and recover orphan tasks on startup."""
     init_db()
+    stale_recovered = orchestrator.recover_stale_tasks()
+    if stale_recovered > 0:
+        print(f"Recovered {stale_recovered} interrupted task(s) from previous session.")
 
 
 @app.get("/health")
@@ -185,6 +188,44 @@ def get_task_workflow(task_id: str) -> Optional[Dict[str, Any]]:
         if not run_read:
             return None
         return run_read.model_dump()
+
+
+@app.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str) -> Dict[str, Any]:
+    """Stop and cancel a running task immediately."""
+    success = orchestrator.cancel_task(task_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"message": "Task stopped successfully", "task_id": task_id, "status": "CANCELLED"}
+
+
+@app.post("/approvals/{approval_id}/decide")
+def decide_approval(approval_id: str, payload: ApprovalDecisionPayload) -> Dict[str, Any]:
+    """Human-in-the-loop: Grant or deny an approval request."""
+    from datetime import datetime
+    with get_db_session() as session:
+        approval = session.query(ApprovalModel).filter_by(id=approval_id).first()
+        if not approval:
+            raise HTTPException(status_code=404, detail="Approval request not found")
+
+        approval.decision = payload.decision.value
+        approval.decided_by = payload.decided_by
+        approval.reason = payload.reason
+        approval.decided_at = datetime.utcnow()
+
+        audit = AuditLogModel(
+            task_id=approval.task_id,
+            event_type="APPROVAL_DECIDED",
+            message=f"Action '{approval.action_type}' was {payload.decision.value} by {payload.decided_by}.",
+        )
+        session.add(audit)
+
+    return {
+        "id": approval_id,
+        "decision": payload.decision.value,
+        "decided_by": payload.decided_by,
+        "status": "RECORDED",
+    }
 
 
 @app.get("/approvals", response_model=List[Dict[str, Any]])

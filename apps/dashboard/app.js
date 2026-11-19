@@ -3,6 +3,7 @@
  */
 
 const API_BASE = "http://127.0.0.1:8000";
+let activeModalTaskId = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   initDashboard();
@@ -42,6 +43,9 @@ async function refreshData() {
     fetchApprovals(),
     fetchAudit(),
   ]);
+  if (activeModalTaskId) {
+    loadTaskDetails(activeModalTaskId);
+  }
 }
 
 async function fetchHealth() {
@@ -107,11 +111,18 @@ async function fetchTasks() {
           <button class="btn btn-sm btn-team" onclick="collaborateTask('${t.id}')">Team Run ⚡</button>
         `;
       } else if (t.status === "RUNNING") {
-        actionHtml = `<span style="font-size:0.75rem; color:#58a6ff; margin-right:0.4rem;">⏳ Running</span><button class="btn btn-view" onclick="viewTaskOutput('${t.id}')">Log</button>`;
+        actionHtml = `
+          <span style="font-size:0.75rem; color:#58a6ff; margin-right:0.3rem;">⏳ Running</span>
+          <button class="btn btn-sm btn-view" onclick="viewTaskOutput('${t.id}')">Inspect</button>
+          <button class="btn btn-sm btn-stop" onclick="stopTask('${t.id}')">Stop ⏹</button>
+        `;
       } else if (t.status === "COMPLETED") {
-        actionHtml = `<button class="btn btn-view" onclick="viewTaskOutput('${t.id}')">View Output</button>`;
-      } else if (t.status === "FAILED") {
-        actionHtml = `<button class="btn btn-view" style="background:#da3633;" onclick="viewTaskOutput('${t.id}')">View Error</button>`;
+        actionHtml = `<button class="btn btn-sm btn-view" onclick="viewTaskOutput('${t.id}')">View Output</button>`;
+      } else if (t.status === "FAILED" || t.status === "CANCELLED") {
+        actionHtml = `
+          <button class="btn btn-sm btn-view" style="background:#da3633;" onclick="viewTaskOutput('${t.id}')">Details</button>
+          <button class="btn btn-sm btn-secondary" onclick="collaborateTask('${t.id}')" title="Retry task with collaborative team">Retry ↺</button>
+        `;
       }
 
       return `
@@ -187,50 +198,72 @@ async function collaborateTask(taskId) {
   }
 }
 
-async function viewTaskOutput(taskId) {
+async function stopTask(taskId) {
+  if (!confirm("Are you sure you want to stop this running task?")) return;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${taskId}/cancel`, { method: "POST" });
+    if (!res.ok) throw new Error("Failed to stop task");
+    await fetchTasks();
+    await fetchAudit();
+  } catch (err) {
+    alert("Stop error: " + err.message);
+  }
+}
+
+function viewTaskOutput(taskId) {
+  activeModalTaskId = taskId;
   const modal = document.getElementById("outputModal");
+  modal.style.display = "flex";
+  loadTaskDetails(taskId);
+}
+
+async function loadTaskDetails(taskId) {
   const meta = document.getElementById("modalMeta");
   const content = document.getElementById("modalContent");
 
-  meta.innerHTML = "Fetching run and negotiation details...";
-  content.innerHTML = "Loading...";
-  modal.style.display = "flex";
-
   try {
-    // 1. Check for collaborative bilateral workflow
     const wfRes = await fetch(`${API_BASE}/tasks/${taskId}/workflow`);
     const workflow = wfRes.ok ? await wfRes.json() : null;
 
-    if (workflow && workflow.messages && workflow.messages.length > 0) {
+    if (workflow) {
       document.getElementById("modalTitle").textContent = "Bilateral Teamwork: Antigravity ↔ OpenCode";
       meta.innerHTML = `
-        <strong>Stage:</strong> <span class="phase-badge">${workflow.current_phase}</span> &bull;
+        <strong>Current Stage:</strong> <span class="phase-badge">${workflow.current_phase}</span> &bull;
         <strong>Status:</strong> <span class="status-badge status-${workflow.status}">${workflow.status}</span> &bull;
-        <strong>Verification:</strong> ${workflow.is_verified ? '<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by Antigravity</span>' : '<span style="color:#d29922;">In Progress</span>'}
+        <strong>Verification:</strong> ${workflow.is_verified ? '<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by Antigravity</span>' : '<span style="color:#d29922;">In Progress...</span>'}
       `;
 
-      let html = `<div style="display:flex; flex-direction:column; gap:0.5rem;">`;
-      workflow.messages.forEach((msg) => {
-        const isAntigravity = msg.sender === "ANTIGRAVITY";
-        const bubbleClass = isAntigravity ? "msg-antigravity" : "msg-opencode";
-        const roleLabel = isAntigravity ? "🟣 Google Antigravity (Architect / Quality Reviewer)" : "🟢 OpenCode Desktop (Implementer / Worker)";
+      if (workflow.messages && workflow.messages.length > 0) {
+        let html = `<div style="display:flex; flex-direction:column; gap:0.6rem;">`;
+        workflow.messages.forEach((msg) => {
+          const isAntigravity = msg.sender === "ANTIGRAVITY";
+          const bubbleClass = isAntigravity ? "msg-antigravity" : "msg-opencode";
+          const roleLabel = isAntigravity ? "🟣 Google Antigravity (Architect / Quality Reviewer)" : "🟢 OpenCode Desktop (Implementer / Worker)";
 
-        html += `
-          <div class="msg-bubble ${bubbleClass}">
-            <div class="msg-header">
-              <span>${roleLabel}</span>
-              <span class="phase-badge">${msg.phase}</span>
+          html += `
+            <div class="msg-bubble ${bubbleClass}">
+              <div class="msg-header">
+                <span>${roleLabel}</span>
+                <span class="phase-badge">${msg.phase}</span>
+              </div>
+              <div class="msg-body">${escapeHtml(msg.content)}</div>
             </div>
-            <div class="msg-body">${escapeHtml(msg.content)}</div>
+          `;
+        });
+        html += `</div>`;
+        content.innerHTML = html;
+      } else {
+        content.innerHTML = `
+          <div style="padding:1rem; text-align:center; color:#58a6ff;">
+            <p><strong>[Stage 1: INSPECTION]</strong> Google Antigravity is currently inspecting your codebase and drafting the technical proposal...</p>
+            <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.4rem;">This screen refreshes live automatically.</p>
           </div>
         `;
-      });
-      html += `</div>`;
-      content.innerHTML = html;
+      }
       return;
     }
 
-    // 2. Otherwise fallback to raw agent runs
+    // Fallback to single agent run
     document.getElementById("modalTitle").textContent = "Single Agent Execution Details";
     const res = await fetch(`${API_BASE}/tasks/${taskId}/runs`);
     const runs = await res.json();
@@ -262,6 +295,7 @@ async function viewTaskOutput(taskId) {
 }
 
 function closeModal() {
+  activeModalTaskId = null;
   const modal = document.getElementById("outputModal");
   if (modal) modal.style.display = "none";
 }
@@ -280,13 +314,36 @@ async function fetchApprovals() {
     }
 
     container.innerHTML = approvals.map((a) => `
-      <div style="padding: 0.5rem 0; border-bottom: 1px solid var(--card-border);">
-        <div style="font-weight:600; color:var(--text-bright);">${escapeHtml(a.action_type)}</div>
-        <div style="font-size:0.8rem; color:var(--text-muted);">${escapeHtml(a.description)}</div>
+      <div class="approval-item">
+        <div class="approval-header">
+          <strong style="color:var(--text-bright);">${escapeHtml(a.action_type)}</strong>
+          <span class="badge badge-warning">${escapeHtml(a.risk_level)}</span>
+        </div>
+        <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.3rem;">${escapeHtml(a.description)}</div>
+        <div style="font-family:monospace; font-size:0.75rem; color:#79c0ff; margin-bottom:0.5rem; word-break:break-all;">${escapeHtml(a.command_or_path)}</div>
+        <div class="approval-actions">
+          <button class="btn btn-approve" onclick="decideApproval('${a.id}', 'APPROVED')">Approve ✓</button>
+          <button class="btn btn-deny" onclick="decideApproval('${a.id}', 'DENIED')">Deny ✕</button>
+        </div>
       </div>
     `).join("");
   } catch (err) {
     container.innerHTML = `<p class="empty-state">Unable to load approvals.</p>`;
+  }
+}
+
+async function decideApproval(approvalId, decision) {
+  try {
+    const res = await fetch(`${API_BASE}/approvals/${approvalId}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, decided_by: "Ahmed" }),
+    });
+    if (!res.ok) throw new Error("Decision submission failed");
+    await fetchApprovals();
+    await fetchAudit();
+  } catch (err) {
+    alert("Approval error: " + err.message);
   }
 }
 
