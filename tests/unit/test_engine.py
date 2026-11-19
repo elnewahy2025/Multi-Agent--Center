@@ -47,10 +47,41 @@ class TestOrchestrator(unittest.TestCase):
         task_id = task["id"]
         self.assertEqual(task["status"], "PENDING")
 
-        # Retrieve via GET
-        get_res = self.client.get(f"/tasks/{task_id}")
-        self.assertEqual(get_res.status_code, 200)
-        self.assertEqual(get_res.json()["title"], "Audit dependencies")
+        try:
+            # Retrieve via GET
+            get_res = self.client.get(f"/tasks/{task_id}")
+            self.assertEqual(get_res.status_code, 200)
+            self.assertEqual(get_res.json()["title"], "Audit dependencies")
+        finally:
+            del_res = self.client.delete(f"/tasks/{task_id}")
+            self.assertEqual(del_res.status_code, 200)
+
+    def test_auto_generated_variable_title_from_description(self):
+        res1 = self.client.post(
+            "/tasks",
+            json={
+                "description": "Please fix authentication middleware timeout on login route. Add unit tests too.",
+                "policy_mode": "AUTO_LOW_IMPACT",
+            },
+        )
+        res2 = self.client.post(
+            "/tasks",
+            json={
+                "title": "",
+                "description": "Refactor SQLAlchemy models into separate files for modularity",
+                "policy_mode": "AUTO_LOW_IMPACT",
+            },
+        )
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res2.status_code, 200)
+        t1, t2 = res1.json(), res2.json()
+        try:
+            self.assertEqual(t1["title"], "Fix authentication middleware timeout on login route")
+            self.assertEqual(t2["title"], "Refactor SQLAlchemy models into separate files for modularity")
+            self.assertNotEqual(t1["title"], t2["title"])
+        finally:
+            self.client.delete(f"/tasks/{t1['id']}")
+            self.client.delete(f"/tasks/{t2['id']}")
 
 
 if __name__ == "__main__":

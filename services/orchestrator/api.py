@@ -119,6 +119,24 @@ def get_task(task_id: str) -> TaskRead:
     return task
 
 
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: str) -> Dict[str, Any]:
+    """Delete a non-running task and its associated telemetry records."""
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status == TaskStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="Cannot delete a running task; stop it first.")
+
+    with get_db_session() as session:
+        session.query(AgentEventModel).filter_by(task_id=task_id).delete()
+        session.query(ErrorLogModel).filter_by(task_id=task_id).delete()
+        session.query(AuditLogModel).filter_by(task_id=task_id).delete()
+        session.query(WorkflowRunModel).filter_by(task_id=task_id).delete()
+        session.query(TaskModel).filter_by(id=task_id).delete()
+    return {"deleted": True, "task_id": task_id}
+
+
 @app.post("/tasks/{task_id}/execute")
 def execute_task(task_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Trigger background execution of a submitted task."""

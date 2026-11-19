@@ -15,6 +15,7 @@ from packages.contracts import (
     TaskCreate,
     TaskRead,
     TaskStatus,
+    derive_task_title,
 )
 from services.agent_bridge import AgentRegistry
 from services.orchestrator.db import (
@@ -64,10 +65,11 @@ class TaskOrchestrator:
                     )
                     session.add(new_p)
 
+            title = derive_task_title(request.description, request.title)
             model = TaskModel(
                 id=task_id,
                 project_id=project_id,
-                title=request.title,
+                title=title,
                 description=request.description,
                 assigned_agent=request.preferred_agent.value if request.preferred_agent else None,
                 status=TaskStatus.PENDING.value,
@@ -86,7 +88,7 @@ class TaskOrchestrator:
             audit = AuditLogModel(
                 task_id=task_id,
                 event_type="TASK_CREATED",
-                message=f"Task '{request.title}' submitted",
+                message=f"Task '{title}' submitted",
             )
             session.add(audit)
 
