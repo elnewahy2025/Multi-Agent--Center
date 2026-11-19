@@ -22,6 +22,11 @@ from packages.contracts.approval import (
     ApprovalDecisionPayload,
     ApprovalRequest,
 )
+from packages.contracts.workflow import (
+    WorkflowMessage,
+    WorkflowPhase,
+    WorkflowRunRead,
+)
 
 __all__ = [
     "AgentType",
@@ -38,4 +43,7 @@ __all__ = [
     "AgentExecutionResult",
     "ApprovalDecisionPayload",
     "ApprovalRequest",
+    "WorkflowMessage",
+    "WorkflowPhase",
+    "WorkflowRunRead",
 ]

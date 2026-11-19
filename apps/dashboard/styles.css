@@ -128,6 +128,46 @@ input[type="text"]:focus, select:focus, textarea:focus {
 .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.75rem; }
 .btn-run { background: #1f6feb; color: white; padding: 0.25rem 0.6rem; font-size: 0.75rem; }
 .btn-run:hover { background: #388bfd; }
+.btn-team { background: #8957e5; color: white; padding: 0.25rem 0.6rem; font-size: 0.75rem; margin-left: 0.3rem; border-radius: 4px; }
+.btn-team:hover { background: #a371f7; }
+
+/* Collaborative bilateral message bubbles */
+.msg-bubble {
+  border-radius: 8px;
+  padding: 0.85rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--card-border);
+}
+.msg-antigravity {
+  background: rgba(137, 87, 229, 0.12);
+  border-color: rgba(137, 87, 229, 0.4);
+}
+.msg-opencode {
+  background: rgba(35, 134, 54, 0.12);
+  border-color: rgba(35, 134, 54, 0.4);
+}
+.msg-header {
+  font-weight: 600;
+  font-size: 0.8rem;
+  margin-bottom: 0.4rem;
+  display: flex;
+  justify-content: space-between;
+}
+.msg-body {
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  font-family: inherit;
+  line-height: 1.45;
+  color: var(--text-bright);
+}
+.phase-badge {
+  font-size: 0.68rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  background: #21262d;
+  color: #58a6ff;
+  border: 1px solid var(--card-border);
+}
 
 .table-container { overflow-x: auto; padding: 0; }
 .tasks-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }

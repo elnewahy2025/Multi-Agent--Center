@@ -102,7 +102,10 @@ async function fetchTasks() {
     tbody.innerHTML = tasks.map((t) => {
       let actionHtml = "-";
       if (t.status === "PENDING") {
-        actionHtml = `<button class="btn btn-run" onclick="executeTask('${t.id}')">Run</button>`;
+        actionHtml = `
+          <button class="btn btn-sm btn-run" onclick="executeTask('${t.id}')">Run</button>
+          <button class="btn btn-sm btn-team" onclick="collaborateTask('${t.id}')">Team Run ⚡</button>
+        `;
       } else if (t.status === "RUNNING") {
         actionHtml = `<span style="font-size:0.75rem; color:#58a6ff; margin-right:0.4rem;">⏳ Running</span><button class="btn btn-view" onclick="viewTaskOutput('${t.id}')">Log</button>`;
       } else if (t.status === "COMPLETED") {
@@ -115,7 +118,7 @@ async function fetchTasks() {
         <tr>
           <td style="font-family: monospace;">${t.id.slice(0, 8)}...</td>
           <td><strong>${escapeHtml(t.title)}</strong></td>
-          <td>${t.assigned_agent || "Auto"}</td>
+          <td>${t.assigned_agent || "Antigravity + OpenCode"}</td>
           <td><span class="status-badge status-${t.status}">${t.status}</span></td>
           <td style="font-size:0.75rem; color:var(--text-muted);">${t.worktree_path ? escapeHtml(t.worktree_path.split('\\').pop()) : 'Root'}</td>
           <td style="font-size:0.75rem;">${new Date(t.created_at).toLocaleTimeString()}</td>
@@ -173,16 +176,62 @@ async function executeTask(taskId) {
   }
 }
 
+async function collaborateTask(taskId) {
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${taskId}/collaborate`, { method: "POST" });
+    if (!res.ok) throw new Error("Collaboration workflow failed to dispatch");
+    await fetchTasks();
+    await fetchAudit();
+  } catch (err) {
+    alert("Collaboration error: " + err.message);
+  }
+}
+
 async function viewTaskOutput(taskId) {
   const modal = document.getElementById("outputModal");
   const meta = document.getElementById("modalMeta");
   const content = document.getElementById("modalContent");
 
-  meta.innerHTML = "Fetching agent run details...";
-  content.textContent = "Loading...";
+  meta.innerHTML = "Fetching run and negotiation details...";
+  content.innerHTML = "Loading...";
   modal.style.display = "flex";
 
   try {
+    // 1. Check for collaborative bilateral workflow
+    const wfRes = await fetch(`${API_BASE}/tasks/${taskId}/workflow`);
+    const workflow = wfRes.ok ? await wfRes.json() : null;
+
+    if (workflow && workflow.messages && workflow.messages.length > 0) {
+      document.getElementById("modalTitle").textContent = "Bilateral Teamwork: Antigravity ↔ OpenCode";
+      meta.innerHTML = `
+        <strong>Stage:</strong> <span class="phase-badge">${workflow.current_phase}</span> &bull;
+        <strong>Status:</strong> <span class="status-badge status-${workflow.status}">${workflow.status}</span> &bull;
+        <strong>Verification:</strong> ${workflow.is_verified ? '<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by Antigravity</span>' : '<span style="color:#d29922;">In Progress</span>'}
+      `;
+
+      let html = `<div style="display:flex; flex-direction:column; gap:0.5rem;">`;
+      workflow.messages.forEach((msg) => {
+        const isAntigravity = msg.sender === "ANTIGRAVITY";
+        const bubbleClass = isAntigravity ? "msg-antigravity" : "msg-opencode";
+        const roleLabel = isAntigravity ? "🟣 Google Antigravity (Architect / Quality Reviewer)" : "🟢 OpenCode Desktop (Implementer / Worker)";
+
+        html += `
+          <div class="msg-bubble ${bubbleClass}">
+            <div class="msg-header">
+              <span>${roleLabel}</span>
+              <span class="phase-badge">${msg.phase}</span>
+            </div>
+            <div class="msg-body">${escapeHtml(msg.content)}</div>
+          </div>
+        `;
+      });
+      html += `</div>`;
+      content.innerHTML = html;
+      return;
+    }
+
+    // 2. Otherwise fallback to raw agent runs
+    document.getElementById("modalTitle").textContent = "Single Agent Execution Details";
     const res = await fetch(`${API_BASE}/tasks/${taskId}/runs`);
     const runs = await res.json();
 
@@ -208,7 +257,7 @@ async function viewTaskOutput(taskId) {
 
     content.textContent = text;
   } catch (err) {
-    content.textContent = "Failed to fetch task run details: " + err.message;
+    content.textContent = "Failed to fetch task details: " + err.message;
   }
 }
 

@@ -17,10 +17,12 @@ from services.orchestrator.db import (
     ApprovalModel,
     AuditLogModel,
     TaskModel,
+    WorkflowRunModel,
     get_db_session,
     init_db,
 )
 from services.orchestrator.engine import TaskOrchestrator
+from services.orchestrator.workflows import CollaborativeWorkflowEngine
 
 app = FastAPI(
     title="AI Coding Command Center API",
@@ -38,6 +40,7 @@ app.add_middleware(
 )
 
 orchestrator = TaskOrchestrator()
+collab_engine = CollaborativeWorkflowEngine()
 
 
 @app.on_event("startup")
@@ -147,6 +150,41 @@ def get_task_runs(task_id: str) -> List[Dict[str, Any]]:
             }
             for r in runs
         ]
+
+
+@app.post("/tasks/{task_id}/collaborate")
+def collaborate_task(task_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    """Trigger bilateral collaborative workflow (Antigravity <-> OpenCode) in the background."""
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    background_tasks.add_task(collab_engine.run_collaborative_workflow, task_id)
+    return {
+        "status": "RUNNING",
+        "task_id": task_id,
+        "workflow": "Antigravity <-> OpenCode Bilateral Collaboration",
+        "message": "Collaborative inspection and negotiation initiated",
+    }
+
+
+@app.get("/tasks/{task_id}/workflow")
+def get_task_workflow(task_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve the collaborative workflow state and negotiation message history."""
+    with get_db_session() as session:
+        wf = (
+            session.query(WorkflowRunModel)
+            .filter_by(task_id=task_id)
+            .order_by(WorkflowRunModel.created_at.desc())
+            .first()
+        )
+        if not wf:
+            return None
+
+        run_read = collab_engine.get_workflow_run(wf.id)
+        if not run_read:
+            return None
+        return run_read.model_dump()
 
 
 @app.get("/approvals", response_model=List[Dict[str, Any]])
