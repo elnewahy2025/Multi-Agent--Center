@@ -8,6 +8,8 @@ from services.orchestrator.db.models import (
     Base,
     ProjectModel,
     TaskModel,
+    WorkflowMessageModel,
+    WorkflowRunModel,
 )
 from services.orchestrator.db.session import (
     get_db_session,
@@ -28,4 +30,6 @@ __all__ = [
     "AgentRunModel",
     "ApprovalModel",
     "AuditLogModel",
+    "WorkflowRunModel",
+    "WorkflowMessageModel",
 ]

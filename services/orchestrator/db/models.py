@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -117,3 +118,35 @@ class AuditLogModel(Base):
     message = Column(Text, nullable=False)
     payload_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class WorkflowRunModel(Base):
+    """State of a collaborative bilateral multi-agent workflow."""
+    __tablename__ = "workflow_runs"
+
+    id = Column(String(64), primary_key=True)
+    task_id = Column(String(64), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(32), nullable=False, default="RUNNING")
+    current_phase = Column(String(32), nullable=False, default="INSPECTION")
+    is_verified = Column(Boolean, nullable=False, default=False)
+    verification_report = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    task = relationship("TaskModel")
+    messages = relationship("WorkflowMessageModel", back_populates="workflow_run", cascade="all, delete-orphan")
+
+
+class WorkflowMessageModel(Base):
+    """Bilateral message exchanged between Antigravity and OpenCode."""
+    __tablename__ = "workflow_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workflow_run_id = Column(String(64), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False)
+    sender = Column(String(32), nullable=False)
+    recipient = Column(String(32), nullable=False)
+    phase = Column(String(32), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    workflow_run = relationship("WorkflowRunModel", back_populates="messages")
