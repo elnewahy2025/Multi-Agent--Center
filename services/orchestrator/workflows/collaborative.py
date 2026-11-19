@@ -148,10 +148,11 @@ class CollaborativeWorkflowEngine:
             raise RuntimeError("Both Antigravity and OpenCode adapters must be available for collaboration.")
 
         # Resolve working directory
-        working_dir = "."
+        repo_root = str(Path(__file__).resolve().parents[3])
+        working_dir = repo_root
         with get_db_session() as session:
             t = session.query(TaskModel).filter_by(id=task_id).first()
-            if t and t.project:
+            if t and t.project and t.project.root_path:
                 working_dir = t.project.root_path
 
         # -------------------------------------------------------------
@@ -221,7 +222,7 @@ class CollaborativeWorkflowEngine:
         worktree_dir = working_dir
         worktree_name = None
 
-        if working_dir != ".":
+        if working_dir:
             try:
                 wt_path = self.workspace_mgr.create_worktree(
                     project_root=working_dir,
@@ -230,6 +231,10 @@ class CollaborativeWorkflowEngine:
                 )
                 worktree_dir = str(wt_path)
                 worktree_name = wt_path.name
+                with get_db_session() as session:
+                    t = session.query(TaskModel).filter_by(id=task_id).first()
+                    if t:
+                        t.worktree_path = worktree_dir
             except Exception as exc:
                 logger.warning("Could not allocate worktree, falling back to project root: %s", exc)
 

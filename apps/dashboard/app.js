@@ -4,6 +4,7 @@
 
 const API_BASE = "http://127.0.0.1:8000";
 let activeModalTaskId = null;
+let currentModalTab = "chat";
 
 document.addEventListener("DOMContentLoaded", () => {
   initDashboard();
@@ -45,6 +46,9 @@ async function refreshData() {
   ]);
   if (activeModalTaskId) {
     loadTaskDetails(activeModalTaskId);
+    if (currentModalTab === "files") {
+      loadTaskFiles(activeModalTaskId);
+    }
   }
 }
 
@@ -109,18 +113,24 @@ async function fetchTasks() {
         actionHtml = `
           <button class="btn btn-sm btn-run" onclick="executeTask('${t.id}')">Run</button>
           <button class="btn btn-sm btn-team" onclick="collaborateTask('${t.id}')">Team Run ⚡</button>
+          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
         `;
       } else if (t.status === "RUNNING") {
         actionHtml = `
           <span style="font-size:0.75rem; color:#58a6ff; margin-right:0.3rem;">⏳ Running</span>
-          <button class="btn btn-sm btn-view" onclick="viewTaskOutput('${t.id}')">Inspect</button>
+          <button class="btn btn-sm btn-view" onclick="viewTaskDetails('${t.id}', 'chat')">Log</button>
+          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
           <button class="btn btn-sm btn-stop" onclick="stopTask('${t.id}')">Stop ⏹</button>
         `;
       } else if (t.status === "COMPLETED") {
-        actionHtml = `<button class="btn btn-sm btn-view" onclick="viewTaskOutput('${t.id}')">View Output</button>`;
+        actionHtml = `
+          <button class="btn btn-sm btn-view" onclick="viewTaskDetails('${t.id}', 'chat')">Log</button>
+          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
+        `;
       } else if (t.status === "FAILED" || t.status === "CANCELLED") {
         actionHtml = `
-          <button class="btn btn-sm btn-view" style="background:#da3633;" onclick="viewTaskOutput('${t.id}')">Details</button>
+          <button class="btn btn-sm btn-view" style="background:#da3633;" onclick="viewTaskDetails('${t.id}', 'chat')">Details</button>
+          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
           <button class="btn btn-sm btn-secondary" onclick="collaborateTask('${t.id}')" title="Retry task with collaborative team">Retry ↺</button>
         `;
       }
@@ -131,9 +141,9 @@ async function fetchTasks() {
           <td><strong>${escapeHtml(t.title)}</strong></td>
           <td>${t.assigned_agent || "Antigravity + OpenCode"}</td>
           <td><span class="status-badge status-${t.status}">${t.status}</span></td>
-          <td style="font-size:0.75rem; color:var(--text-muted);">${t.worktree_path ? escapeHtml(t.worktree_path.split('\\').pop()) : 'Root'}</td>
+          <td style="font-size:0.75rem; color:var(--text-muted);">${t.worktree_path ? escapeHtml(t.worktree_path.split('\\\\').pop().split('/').pop()) : 'Root'}</td>
           <td style="font-size:0.75rem;">${new Date(t.created_at).toLocaleTimeString()}</td>
-          <td>${actionHtml}</td>
+          <td style="display:flex; gap:0.3rem; align-items:center;">${actionHtml}</td>
         </tr>
       `;
     }).join("");
@@ -210,11 +220,42 @@ async function stopTask(taskId) {
   }
 }
 
-function viewTaskOutput(taskId) {
+function switchModalTab(tabName) {
+  currentModalTab = tabName;
+  const tabChatBtn = document.getElementById("tabChat");
+  const tabFilesBtn = document.getElementById("tabFiles");
+  const chatView = document.getElementById("tabChatView");
+  const filesView = document.getElementById("tabFilesView");
+
+  if (tabName === "files") {
+    if (tabFilesBtn) tabFilesBtn.classList.add("active");
+    if (tabChatBtn) tabChatBtn.classList.remove("active");
+    if (filesView) filesView.style.display = "block";
+    if (chatView) chatView.style.display = "none";
+    if (activeModalTaskId) loadTaskFiles(activeModalTaskId);
+  } else {
+    if (tabChatBtn) tabChatBtn.classList.add("active");
+    if (tabFilesBtn) tabFilesBtn.classList.remove("active");
+    if (chatView) chatView.style.display = "block";
+    if (filesView) filesView.style.display = "none";
+  }
+}
+
+function viewTaskDetails(taskId, tab = "chat") {
   activeModalTaskId = taskId;
   const modal = document.getElementById("outputModal");
-  modal.style.display = "flex";
+  if (modal) modal.style.display = "flex";
+  switchModalTab(tab);
   loadTaskDetails(taskId);
+  loadTaskFiles(taskId);
+}
+
+function viewTaskOutput(taskId) {
+  viewTaskDetails(taskId, "chat");
+}
+
+function viewTaskFiles(taskId) {
+  viewTaskDetails(taskId, "files");
 }
 
 async function loadTaskDetails(taskId) {
@@ -298,6 +339,71 @@ function closeModal() {
   activeModalTaskId = null;
   const modal = document.getElementById("outputModal");
   if (modal) modal.style.display = "none";
+}
+
+async function loadTaskFiles(taskId) {
+  const container = document.getElementById("filesContainer");
+  const badge = document.getElementById("modalFilesBadge");
+  if (!container) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${taskId}/files`);
+    if (!res.ok) throw new Error("Could not fetch file status");
+    const data = await res.json();
+
+    const changedFiles = data.changed_files || [];
+    if (badge) badge.textContent = changedFiles.length;
+
+    let html = `
+      <div class="files-summary-bar">
+        <div><strong>Working Directory:</strong> <span style="font-family:monospace; color:var(--accent-color);">${escapeHtml(data.working_dir)}</span></div>
+        <div><strong>Files Changed:</strong> <span style="color:#3fb950; font-weight:700;">${changedFiles.length}</span></div>
+      </div>
+    `;
+
+    if (changedFiles.length === 0) {
+      html += `
+        <div class="empty-state" style="padding:2rem;">
+          <p style="font-size:0.95rem; color:var(--text-bright); margin-bottom:0.5rem;">ℹ️ No files modified on disk yet</p>
+          <p style="color:var(--text-muted); font-size:0.8rem;">Agents may currently be reading the codebase, planning, or negotiating before writing changes.</p>
+          ${data.context_files && data.context_files.length ? `<p style="margin-top:0.8rem; font-size:0.8rem;"><strong>Target Context Files:</strong> ${data.context_files.map(f => `<code>${escapeHtml(f)}</code>`).join(", ")}</p>` : ''}
+        </div>
+      `;
+      container.innerHTML = html;
+      return;
+    }
+
+    changedFiles.forEach((file) => {
+      const statusClass = `file-status-${file.status || 'CHANGED'}`;
+      const diffFormatted = formatDiff(file.diff || '');
+
+      html += `
+        <div class="file-card">
+          <div class="file-card-header">
+            <span class="file-path">📄 ${escapeHtml(file.path)}</span>
+            <span class="file-status-badge ${statusClass}">${file.status}</span>
+          </div>
+          <div class="diff-viewer">${diffFormatted}</div>
+        </div>
+      `;
+    });
+
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">Error loading file details: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function formatDiff(diffText) {
+  if (!diffText) return `<span class="diff-line diff-ctx">No diff available</span>`;
+  const lines = diffText.split('\n');
+  return lines.map((line) => {
+    let cls = "diff-ctx";
+    if (line.startsWith('+') && !line.startsWith('+++')) cls = "diff-add";
+    else if (line.startsWith('-') && !line.startsWith('---')) cls = "diff-del";
+    else if (line.startsWith('@@') || line.startsWith('+++') || line.startsWith('---')) cls = "diff-hdr";
+    return `<span class="diff-line ${cls}">${escapeHtml(line)}</span>`;
+  }).join('');
 }
 
 async function fetchApprovals() {

@@ -133,16 +133,33 @@
     </section>
   </main>
 
-  <!-- Output Modal -->
+  <!-- Output & Files Modal -->
   <div class="modal-overlay" id="outputModal" style="display: none;">
     <div class="modal-card">
       <div class="modal-header">
-        <h3 id="modalTitle">Agent Execution Details</h3>
+        <div class="modal-title-area">
+          <h3 id="modalTitle">Agent Execution Details</h3>
+          <div class="modal-tabs">
+            <button class="tab-btn active" id="tabChat" onclick="switchModalTab('chat')">💬 Team Negotiation & Logs</button>
+            <button class="tab-btn" id="tabFiles" onclick="switchModalTab('files')">📁 Files Worked On <span class="badge" id="modalFilesBadge">0</span></button>
+          </div>
+        </div>
         <button class="btn btn-sm btn-secondary" id="btnCloseModal">✕</button>
       </div>
       <div class="modal-body">
         <div id="modalMeta"></div>
-        <pre class="output-terminal" id="modalContent">No output yet...</pre>
+        
+        <!-- Tab 1: Chat / Terminal Output -->
+        <div id="tabChatView">
+          <pre class="output-terminal" id="modalContent">No output yet...</pre>
+        </div>
+
+        <!-- Tab 2: Changed Files & Diffs View -->
+        <div id="tabFilesView" style="display: none;">
+          <div id="filesContainer" class="files-container">
+            <div class="empty-state">Loading changed files...</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

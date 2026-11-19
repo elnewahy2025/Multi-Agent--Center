@@ -1,5 +1,6 @@
 """FastAPI application for the AI Coding Command Center."""
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -153,6 +154,39 @@ def get_task_runs(task_id: str) -> List[Dict[str, Any]]:
             }
             for r in runs
         ]
+
+
+@app.get("/tasks/{task_id}/files")
+def get_task_files(task_id: str) -> Dict[str, Any]:
+    """Inspect and return all files touched, changed, or actively worked on by agents for this task."""
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    working_dir = repo_root
+
+    # Priority 1: Isolated Git worktree assigned to the task
+    if task.worktree_path and Path(task.worktree_path).exists():
+        working_dir = Path(task.worktree_path)
+    else:
+        # Priority 2: Project root if registered
+        with get_db_session() as session:
+            t = session.query(TaskModel).filter_by(id=task_id).first()
+            if t and t.project and t.project.root_path and Path(t.project.root_path).exists():
+                working_dir = Path(t.project.root_path)
+
+    changed_files = orchestrator.workspace_mgr.get_changed_files(working_dir)
+    context_files = task.metadata.get("context_files", []) if task.metadata else []
+
+    return {
+        "task_id": task_id,
+        "working_dir": str(working_dir),
+        "is_worktree": bool(task.worktree_path and Path(task.worktree_path).exists()),
+        "total_changed": len(changed_files),
+        "changed_files": changed_files,
+        "context_files": context_files,
+    }
 
 
 @app.post("/tasks/{task_id}/collaborate")
