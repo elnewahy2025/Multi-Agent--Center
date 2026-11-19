@@ -63,6 +63,44 @@ class TestAdapters(unittest.TestCase):
         agent_types = [a.agent_type for a in available]
         self.assertIn(AgentType.OPENCODE, agent_types)
         self.assertIn(AgentType.ANTIGRAVITY, agent_types)
+        self.assertIn(AgentType.CLAUDE_CODE, agent_types)
+        self.assertIn(AgentType.QWEN_CODE, agent_types)
+
+    def test_claude_command_builder(self):
+        from services.agent_bridge.claude import ClaudeCodeAdapter
+        adapter = ClaudeCodeAdapter()
+        req = AgentExecutionRequest(
+            task_id="tsk_claude_1",
+            run_id="run_claude_1",
+            prompt="Refactor database models",
+            working_directory="C:\\test\\repo",
+            worktree_name="feature-db",
+            policy_mode=PolicyMode.AUTO_LOW_IMPACT,
+            context_files=["C:\\test\\repo\\models.py"],
+        )
+        cmd = adapter.build_command(req)
+        self.assertIn("-p", cmd)
+        self.assertIn("Refactor database models", cmd)
+        self.assertIn("--worktree", cmd)
+        self.assertIn("feature-db", cmd)
+        self.assertIn("--dangerously-skip-permissions", cmd)
+
+    def test_qwen_command_builder(self):
+        from services.agent_bridge.qwen import QwenCodeAdapter
+        adapter = QwenCodeAdapter()
+        req = AgentExecutionRequest(
+            task_id="tsk_qwen_1",
+            run_id="run_qwen_1",
+            prompt="Write tests for payment api",
+            working_directory="C:\\test\\repo",
+            worktree_name="test-payment",
+        )
+        cmd = adapter.build_command(req)
+        self.assertIn("--output-format", cmd)
+        self.assertIn("json", cmd)
+        self.assertIn("--worktree", cmd)
+        self.assertIn("test-payment", cmd)
+        self.assertIn("Write tests for payment api", cmd)
 
 
 if __name__ == "__main__":
