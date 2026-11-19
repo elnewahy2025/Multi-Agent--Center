@@ -129,6 +129,41 @@ class TestOrchestrator(unittest.TestCase):
         finally:
             self.client.delete(f"/tasks/{task['id']}")
 
+    def test_fs_browse_and_static_no_cache_headers(self):
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parents[2].resolve()
+
+        # Default workspace browse
+        res = self.client.get("/fs/browse")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(Path(data["current_dir"]).resolve(), repo_root)
+        self.assertIsNotNone(data["parent_dir"])
+        self.assertTrue(len(data["drives"]) >= 1)
+        folder_names = [f["name"] for f in data["folders"]]
+        self.assertIn("services", folder_names)
+        self.assertIn("apps", folder_names)
+
+        # Recursive search query
+        q_res = self.client.get("/fs/browse?query=api.py")
+        self.assertEqual(q_res.status_code, 200)
+        q_data = q_res.json()
+        rel_files = [f["rel_path"] for f in q_data["files"]]
+        self.assertIn("services/orchestrator/api.py", rel_files)
+
+        # Navigate up to parent and drive anchor without error
+        drive_anchor = str(Path(repo_root).anchor)
+        drv_res = self.client.get(f"/fs/browse?path={drive_anchor}")
+        self.assertEqual(drv_res.status_code, 200)
+        self.assertIsNone(drv_res.json()["parent_dir"])
+
+        # Static dashboard assets disable browser cache
+        for asset in ("/", "/app.js", "/styles.css"):
+            r = self.client.get(asset)
+            self.assertEqual(r.status_code, 200)
+            self.assertIn("no-cache", r.headers.get("cache-control", "").lower())
+
 
 if __name__ == "__main__":
     unittest.main()

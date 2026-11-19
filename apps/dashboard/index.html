@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI Coding Command Center</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20261119c">
 </head>
 <body>
   <header class="header">
@@ -78,14 +78,37 @@
           <div class="form-group">
             <label for="projectPath">Target Scope (Entire Folder or Specific File(s) / Subfolder)</label>
             <div class="scope-toolbar">
-              <button type="button" class="scope-mode-btn active" id="btnScopeFolder">📁 Entire Folder</button>
-              <button type="button" class="scope-mode-btn" id="btnScopeFiles">📄 Specific File(s) / Subfolder</button>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFolder">📂 Browse Folder…</button>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFile">📄 Browse File…</button>
+              <button type="button" class="scope-mode-btn active" id="btnScopeFolder" onclick="handleScopeFolderClick()">📁 Entire Folder</button>
+              <button type="button" class="scope-mode-btn" id="btnScopeFiles" onclick="handleScopeFilesClick()">📄 Specific File(s) / Subfolder</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFolder" onclick="handleBrowseFolderClick()">📂 Browse Folder…</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFile" onclick="handleBrowseFileClick()">📄 Browse File…</button>
             </div>
             <div class="scope-input-row">
               <input type="text" id="projectPath" list="workspacePathsList" placeholder="C:\Users\ahmed\AI-Coding-Command-Center (or type/pick a file or subfolder)">
-              <button type="button" class="btn btn-secondary btn-sm" id="btnAddTarget" style="display:none; white-space:nowrap;">+ Add Target</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnAddTarget" onclick="handleAddTargetClick()" style="display:none; white-space:nowrap;">+ Add Target</button>
+            </div>
+            <div id="fsExplorerPanel" class="fs-explorer-panel" style="display: none;">
+              <div class="fs-explorer-header">
+                <span class="fs-explorer-title" id="fsExplorerTitle">📁 Browse Target Folder</span>
+                <div class="fs-explorer-nav">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnFsParent" onclick="browseParentDir()">⬆️ Parent Folder</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnFsRoot" onclick="browseProjectRoot()">🏠 Project Root</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnFsClose" onclick="closeFsExplorer()">✕ Close</button>
+                </div>
+              </div>
+              <div class="fs-path-bar">
+                <span class="fs-path-label" id="fsCurrentDirLabel">Loading…</span>
+                <span class="fs-drives-bar" id="fsDrivesBar"></span>
+              </div>
+              <div class="fs-search-row">
+                <input type="text" id="fsSearchInput" placeholder="Search or filter files &amp; folders..." oninput="handleFsSearchInput(this.value)">
+                <button type="button" class="btn btn-approve btn-sm" id="btnUseCurrentFolder" onclick="useCurrentExplorerFolder()" style="white-space:nowrap;">✓ Use This Entire Folder</button>
+                <button type="button" class="btn btn-approve btn-sm" id="btnFsDone" onclick="closeFsExplorer()" style="display:none; white-space:nowrap;">✓ Done</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnFsClearSelected" onclick="clearSelectedTargets()" style="display:none; white-space:nowrap;">Clear Selected</button>
+              </div>
+              <div id="fsEntriesList" class="fs-entries-list">
+                <div class="empty-state">Loading directory contents…</div>
+              </div>
             </div>
             <datalist id="workspacePathsList"></datalist>
             <div id="selectedFilesChips" class="selected-files-chips"></div>
@@ -197,6 +220,6 @@
     <p>AI Coding Command Center v1.0.0 &bull; Local PostgreSQL 18 &bull; Windows 11</p>
   </footer>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20261119c"></script>
 </body>
 </html>

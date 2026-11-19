@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from packages.contracts import (
@@ -46,6 +46,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def disable_dashboard_cache(request: Request, call_next):
+    """Ensure dashboard HTML/JS/CSS assets always reload cleanly in the browser."""
+    response = await call_next(request)
+    if request.url.path in ("/", "/index.html", "/app.js", "/styles.css"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 orchestrator = TaskOrchestrator()
 collab_engine = CollaborativeWorkflowEngine()
@@ -475,6 +484,158 @@ def list_workspace_paths(root: Optional[str] = None, limit: int = 300) -> Dict[s
             break
 
     return {"root": str(base_dir), "entries": entries}
+
+
+_FS_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".pytest_cache"}
+
+
+def _list_available_drives(anchor: str) -> List[str]:
+    if os.name == "nt":
+        drives = [f"{d}:\\" for d in "CDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{d}:\\")]
+        if drives:
+            return drives
+    return [anchor] if anchor else ["/"]
+
+
+def _rel_or_abs(target: Path, base: Path) -> str:
+    try:
+        rel = target.resolve().relative_to(base.resolve()).as_posix()
+        return rel if rel and rel != "." else str(target.resolve())
+    except ValueError:
+        return str(target.resolve())
+
+
+def _resolve_browse_dir(raw_path: Optional[str], fallback: Path) -> Path:
+    if not raw_path or not raw_path.strip():
+        return fallback
+    try:
+        cand = Path(raw_path.strip()).expanduser().resolve()
+    except OSError:
+        return fallback
+    if cand.is_file():
+        return cand.parent
+    while not cand.exists() and cand.parent != cand:
+        cand = cand.parent
+    return cand if cand.exists() and cand.is_dir() else fallback
+
+
+@app.get("/fs/browse")
+def browse_filesystem(
+    path: Optional[str] = None,
+    root: Optional[str] = None,
+    query: Optional[str] = None,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """Browse directories and files interactively for the dashboard Target Scope explorer."""
+    repo_root = Path(__file__).resolve().parents[2].resolve()
+    workspace_root = _resolve_browse_dir(root, repo_root)
+    current_dir = _resolve_browse_dir(path, workspace_root)
+    parent_dir = str(current_dir.parent) if current_dir.parent != current_dir else None
+    drives = _list_available_drives(str(Path(current_dir).anchor))
+    search_q = (query or "").strip().lower()
+
+    folders: List[Dict[str, Any]] = []
+    files: List[Dict[str, Any]] = []
+
+    if not search_q:
+        try:
+            with os.scandir(current_dir) as it:
+                items = sorted(it, key=lambda e: e.name.lower())
+                for entry in items:
+                    name = entry.name
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if is_dir:
+                        if name in _FS_SKIP_DIRS or name == "$RECYCLE.BIN" or name == "System Volume Information":
+                            continue
+                        if len(folders) < limit:
+                            p = Path(entry.path).resolve()
+                            folders.append({
+                                "name": name,
+                                "path": str(p),
+                                "rel_path": _rel_or_abs(p, workspace_root),
+                                "type": "folder",
+                                "size": 0,
+                            })
+                    else:
+                        if name.endswith((".pyc", ".pyo")):
+                            continue
+                        if len(files) < limit:
+                            p = Path(entry.path).resolve()
+                            try:
+                                size = entry.stat().st_size
+                            except OSError:
+                                size = 0
+                            files.append({
+                                "name": name,
+                                "path": str(p),
+                                "rel_path": _rel_or_abs(p, workspace_root),
+                                "type": "file",
+                                "size": size,
+                            })
+        except OSError as exc:
+            raise HTTPException(status_code=403, detail=f"Cannot read directory {current_dir}: {exc}")
+    else:
+        worktrees_dir = str((current_dir / "workspace" / "worktrees").resolve())
+        total = 0
+        for dirpath, dirnames, filenames in os.walk(current_dir, onerror=lambda _e: None):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in _FS_SKIP_DIRS
+                and d not in ("$RECYCLE.BIN", "System Volume Information")
+                and os.path.abspath(os.path.join(dirpath, d)) != worktrees_dir
+            )
+            for dname in dirnames:
+                p = (Path(dirpath) / dname).resolve()
+                rel_p = _rel_or_abs(p, workspace_root)
+                if search_q in dname.lower() or search_q in rel_p.lower():
+                    folders.append({
+                        "name": dname,
+                        "path": str(p),
+                        "rel_path": rel_p,
+                        "type": "folder",
+                        "size": 0,
+                    })
+                    total += 1
+                    if total >= limit:
+                        break
+            if total >= limit:
+                break
+            for fname in sorted(filenames):
+                if fname.endswith((".pyc", ".pyo")):
+                    continue
+                p = (Path(dirpath) / fname).resolve()
+                rel_p = _rel_or_abs(p, workspace_root)
+                if search_q in fname.lower() or search_q in rel_p.lower():
+                    try:
+                        size = p.stat().st_size
+                    except OSError:
+                        size = 0
+                    files.append({
+                        "name": fname,
+                        "path": str(p),
+                        "rel_path": rel_p,
+                        "type": "file",
+                        "size": size,
+                    })
+                    total += 1
+                    if total >= limit:
+                        break
+            if total >= limit:
+                break
+
+    return {
+        "current_dir": str(current_dir),
+        "parent_dir": parent_dir,
+        "workspace_root": str(workspace_root),
+        "repo_root": str(repo_root),
+        "drives": drives,
+        "query": search_q,
+        "folders": folders,
+        "files": files,
+    }
 
 
 _NATIVE_PICKER_CODE = (

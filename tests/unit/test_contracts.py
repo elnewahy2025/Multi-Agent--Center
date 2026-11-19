@@ -78,6 +78,24 @@ class TestContracts(unittest.TestCase):
         self.assertIn("Inspect, debug, and fix the following pasted code snippet.", normalized)
         self.assertIn(raw_code, normalized)
 
+    def test_fenced_plain_prose_not_treated_as_code(self):
+        prose_in_fence = "```\nAll the buttons for selecting file/folder are not working\n```"
+        self.assertFalse(looks_like_code_snippet(prose_in_fence))
+        self.assertEqual(
+            derive_task_title(prose_in_fence),
+            "All the buttons for selecting file/folder are not working",
+        )
+        normalized = normalize_task_prompt(prose_in_fence)
+        self.assertNotIn("pasted code snippet", normalized)
+
+        tagged_code = "```python\nx = 1\n```"
+        self.assertTrue(looks_like_code_snippet(tagged_code))
+        self.assertEqual(derive_task_title(tagged_code), "Fix code: x = 1")
+
+        untagged_code = "```\nconst total = items.reduce((a, b) => a + b, 0);\n```"
+        self.assertTrue(looks_like_code_snippet(untagged_code))
+        self.assertTrue(derive_task_title(untagged_code).startswith("Fix code: const total"))
+
 
 if __name__ == "__main__":
     unittest.main()

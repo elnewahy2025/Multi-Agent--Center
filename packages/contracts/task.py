@@ -20,6 +20,7 @@ _CODE_LINE_RE = re.compile(
     r"CREATE\s+TABLE\s+|<[a-zA-Z!])"
 )
 _CODE_END_RE = re.compile(r"(?:\{\s*|\}\s*;?|;\s*|\):\s*)$")
+_CODE_SYNTAX_RE = re.compile(r"(?:[=(){}\[\];]|</|\b(?:def|class|import|function|const|let)\s+)")
 
 
 def _first_non_empty_line(text: str) -> str:
@@ -30,11 +31,34 @@ def _first_non_empty_line(text: str) -> str:
     return ""
 
 
+def _fenced_block_contains_code(text: str) -> bool:
+    lines = (text or "").splitlines()
+    saw_open = False
+    for raw in lines:
+        s = raw.strip()
+        if not saw_open:
+            if s.startswith("```"):
+                saw_open = True
+                tag = s[3:].strip()
+                if tag and " " not in tag and "```" not in tag:
+                    return True
+            continue
+        if s.startswith("```"):
+            break
+        if not s:
+            continue
+        if _CODE_LINE_RE.match(s) or _CODE_END_RE.search(s) or _CODE_SYNTAX_RE.search(s):
+            return True
+    return False
+
+
 def _starts_with_code(text: str) -> bool:
     first = _first_non_empty_line(text)
     if not first:
         return False
-    return first.startswith("```") or bool(_CODE_LINE_RE.match(first)) or bool(_CODE_END_RE.search(first))
+    if first.startswith("```"):
+        return _fenced_block_contains_code(text)
+    return bool(_CODE_LINE_RE.match(first)) or bool(_CODE_END_RE.search(first))
 
 
 def looks_like_code_snippet(text: str) -> bool:
@@ -42,7 +66,7 @@ def looks_like_code_snippet(text: str) -> bool:
     if not text or not text.strip():
         return False
     if "```" in text:
-        return True
+        return _fenced_block_contains_code(text)
     non_empty = [ln for ln in text.splitlines() if ln.strip()]
     if not non_empty:
         return False
@@ -88,7 +112,7 @@ def derive_task_title(description: str, explicit_title: Optional[str] = None) ->
     first_line = ""
     for raw in (description or "").splitlines():
         cleaned = re.sub(r"^[#*\->\s]+", "", raw).strip()
-        if cleaned:
+        if cleaned and not cleaned.startswith("```"):
             first_line = cleaned
             break
     if not first_line:
