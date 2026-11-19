@@ -61,6 +61,7 @@ class BaseAgentAdapter(abc.ABC):
             process = subprocess.Popen(
                 cmd,
                 cwd=request.working_directory,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

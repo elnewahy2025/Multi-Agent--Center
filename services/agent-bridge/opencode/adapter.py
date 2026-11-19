@@ -81,7 +81,8 @@ class OpenCodeAdapter(BaseAgentAdapter):
     def build_command(self, request: AgentExecutionRequest) -> List[str]:
         """Assemble command line arguments for non-interactive OpenCode task execution."""
         exe = self._resolve_executable() or "opencode"
-        cmd = [exe, "run", "--format", "json", "--archived"]
+        model = request.extra_flags.get("model", "opencode/beam-free")
+        cmd = [exe, "run", "--format", "json", "--archived", "-m", model]
 
         if request.worktree_name:
             cmd.extend(["--worktree", request.worktree_name])
