@@ -153,3 +153,13 @@ def list_audit_trail(limit: int = 50) -> List[Dict[str, Any]]:
             }
             for log in logs
         ]
+
+
+# Mount the operator dashboard static UI at root
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+dashboard_dir = Path(__file__).resolve().parents[2] / "apps" / "dashboard"
+if dashboard_dir.exists():
+    app.mount("/", StaticFiles(directory=str(dashboard_dir), html=True), name="dashboard")
+

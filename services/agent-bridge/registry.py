@@ -8,7 +8,9 @@ from packages.contracts.agent import AgentDescriptor
 from packages.contracts.enums import AgentType
 from services.agent_bridge.antigravity.adapter import AntigravityAdapter
 from services.agent_bridge.base import BaseAgentAdapter
+from services.agent_bridge.claude.adapter import ClaudeCodeAdapter
 from services.agent_bridge.opencode.adapter import OpenCodeAdapter
+from services.agent_bridge.qwen.adapter import QwenCodeAdapter
 
 
 class AgentRegistry:
@@ -19,6 +21,8 @@ class AgentRegistry:
         # Register default supported adapters
         self.register(OpenCodeAdapter())
         self.register(AntigravityAdapter())
+        self.register(ClaudeCodeAdapter())
+        self.register(QwenCodeAdapter())
 
     def register(self, adapter: BaseAgentAdapter) -> None:
         """Register a new agent adapter."""

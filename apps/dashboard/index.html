@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Coding Command Center</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="logo-area">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <h1>AI Coding Command Center</h1>
+        <p class="subtitle">Multi-Agent Hybrid Orchestration Control Plane</p>
+      </div>
+    </div>
+    <div class="system-status">
+      <span class="status-pill status-healthy" id="dbStatus">DB: Connecting...</span>
+      <span class="status-pill status-agent" id="agentsCount">Agents: 0</span>
+      <button class="btn btn-secondary btn-sm" id="btnRefresh">Refresh</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Active Agents Grid -->
+    <section class="section">
+      <div class="section-header">
+        <h2>Detected Coding Agents</h2>
+        <span class="badge">Host System</span>
+      </div>
+      <div class="agents-grid" id="agentsGrid">
+        <div class="card card-loading">Scanning host agents...</div>
+      </div>
+    </section>
+
+    <!-- Task Dispatcher & Pending Approvals -->
+    <div class="two-col">
+      <!-- Create Task -->
+      <section class="section">
+        <div class="section-header">
+          <h2>Submit New Task</h2>
+        </div>
+        <form id="taskForm" class="card task-form">
+          <div class="form-group">
+            <label for="taskTitle">Task Title</label>
+            <input type="text" id="taskTitle" placeholder="e.g. Refactor authentication module" required>
+          </div>
+          <div class="form-group">
+            <label for="taskDesc">Instructions / Prompt</label>
+            <textarea id="taskDesc" rows="4" placeholder="Detailed prompt for the agent..." required></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="taskAgent">Target Agent</label>
+              <select id="taskAgent">
+                <option value="">Auto (Best Available)</option>
+                <option value="OPENCODE">OpenCode Desktop CLI</option>
+                <option value="ANTIGRAVITY">Google Antigravity CLI</option>
+                <option value="CLAUDE_CODE">Claude Code CLI</option>
+                <option value="QWEN_CODE">Qwen Code CLI</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="taskPolicy">Autonomy Policy</label>
+              <select id="taskPolicy">
+                <option value="AUTO_LOW_IMPACT">Auto Low Impact (Default)</option>
+                <option value="ASK">Ask on High Risk</option>
+                <option value="STRICT">Strict Approval</option>
+                <option value="ALLOW_ALL">Allow All (Sandbox)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="projectPath">Target Project Root (Optional)</label>
+            <input type="text" id="projectPath" placeholder="C:\Users\ahmed\AI-Coding-Command-Center">
+          </div>
+          <div class="form-checkbox">
+            <input type="checkbox" id="useWorktree" checked>
+            <label for="useWorktree">Isolate in dedicated Git worktree</label>
+          </div>
+          <button type="submit" class="btn btn-primary" id="btnSubmitTask">Submit Task</button>
+        </form>
+      </section>
+
+      <!-- Approvals -->
+      <section class="section">
+        <div class="section-header">
+          <h2>Pending Human Approvals</h2>
+          <span class="badge badge-warning" id="approvalsBadge">0</span>
+        </div>
+        <div class="card approvals-container" id="approvalsList">
+          <p class="empty-state">No actions currently require human approval.</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- Tasks Lifecycle Table -->
+    <section class="section">
+      <div class="section-header">
+        <h2>Task Execution History</h2>
+      </div>
+      <div class="card table-container">
+        <table class="tasks-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Agent</th>
+              <th>Status</th>
+              <th>Worktree</th>
+              <th>Created</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="tasksTbody">
+            <tr>
+              <td colspan="7" class="empty-state">Loading tasks...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Audit Log -->
+    <section class="section">
+      <div class="section-header">
+        <h2>Live Security & Operational Audit Log</h2>
+      </div>
+      <div class="card audit-card" id="auditLogContainer">
+        <div class="empty-state">No audit logs recorded yet.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>AI Coding Command Center v1.0.0 &bull; Local PostgreSQL 18 &bull; Windows 11</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
