@@ -48,8 +48,11 @@
             <input type="text" id="taskTitle" placeholder="Auto-generated from your prompt below (or type a custom title)">
           </div>
           <div class="form-group">
-            <label for="taskDesc">Instructions / Prompt</label>
-            <textarea id="taskDesc" rows="4" placeholder="Detailed prompt for the agent..." required></textarea>
+            <div class="prompt-label-row">
+              <label for="taskDesc">Instructions / Prompt &mdash; or Paste Code to Fix</label>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnPasteCode" title="Paste clipboard code or wrap selection in a code block">📋 Paste / Wrap Code Snippet</button>
+            </div>
+            <textarea id="taskDesc" class="code-prompt-box" rows="6" placeholder="Describe the task, OR paste a raw code snippet directly here to inspect &amp; fix (Tab indents)..." required></textarea>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -73,8 +76,19 @@
             </div>
           </div>
           <div class="form-group">
-            <label for="projectPath">Target Project Root (Optional)</label>
-            <input type="text" id="projectPath" placeholder="C:\Users\ahmed\AI-Coding-Command-Center">
+            <label for="projectPath">Target Scope (Entire Folder or Specific File(s) / Subfolder)</label>
+            <div class="scope-toolbar">
+              <button type="button" class="scope-mode-btn active" id="btnScopeFolder">📁 Entire Folder</button>
+              <button type="button" class="scope-mode-btn" id="btnScopeFiles">📄 Specific File(s) / Subfolder</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFolder">📂 Browse Folder…</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFile">📄 Browse File…</button>
+            </div>
+            <div class="scope-input-row">
+              <input type="text" id="projectPath" list="workspacePathsList" placeholder="C:\Users\ahmed\AI-Coding-Command-Center (or type/pick a file or subfolder)">
+              <button type="button" class="btn btn-secondary btn-sm" id="btnAddTarget" style="display:none; white-space:nowrap;">+ Add Target</button>
+            </div>
+            <datalist id="workspacePathsList"></datalist>
+            <div id="selectedFilesChips" class="selected-files-chips"></div>
           </div>
           <div class="form-checkbox">
             <input type="checkbox" id="useWorktree" checked>

@@ -1,5 +1,9 @@
 """FastAPI application for the AI Coding Command Center."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -431,6 +435,88 @@ def get_diagnostics() -> Dict[str, Any]:
             for a in agents
         ],
     }
+
+
+@app.get("/fs/list")
+def list_workspace_paths(root: Optional[str] = None, limit: int = 300) -> Dict[str, Any]:
+    """List project files and folders for the dashboard file/directory selector."""
+    repo_root = Path(__file__).resolve().parents[2].resolve()
+    base_dir = repo_root
+    if root and root.strip():
+        cand = Path(root.strip()).resolve()
+        if cand.is_file():
+            cand = cand.parent
+        if not cand.exists() or not cand.is_dir():
+            raise HTTPException(status_code=400, detail=f"Directory not found: {root}")
+        base_dir = cand
+
+    skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv", ".pytest_cache"}
+    entries: List[Dict[str, str]] = []
+    worktrees_dir = str((base_dir / "workspace" / "worktrees").resolve())
+
+    for dirpath, dirnames, filenames in os.walk(base_dir):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in skip_dirs and os.path.abspath(os.path.join(dirpath, d)) != worktrees_dir
+        )
+        rel_dir = Path(dirpath).resolve().relative_to(base_dir).as_posix()
+        if rel_dir != ".":
+            entries.append({"path": rel_dir, "type": "folder"})
+            if len(entries) >= limit:
+                break
+        for fname in sorted(filenames):
+            if fname.endswith((".pyc", ".pyo")):
+                continue
+            rel_file = f"{rel_dir}/{fname}" if rel_dir != "." else fname
+            entries.append({"path": rel_file, "type": "file"})
+            if len(entries) >= limit:
+                break
+        if len(entries) >= limit:
+            break
+
+    return {"root": str(base_dir), "entries": entries}
+
+
+_NATIVE_PICKER_CODE = (
+    "import json, sys, tkinter as tk\n"
+    "from tkinter import filedialog\n"
+    "mode, initial = sys.argv[1], sys.argv[2]\n"
+    "root = tk.Tk()\n"
+    "root.withdraw()\n"
+    "root.wm_attributes('-topmost', 1)\n"
+    "if mode == 'file':\n"
+    "    paths = list(filedialog.askopenfilenames(initialdir=initial, title='Select File(s) for Agent Task'))\n"
+    "else:\n"
+    "    picked = filedialog.askdirectory(initialdir=initial, title='Select Target Folder')\n"
+    "    paths = [picked] if picked else []\n"
+    "root.destroy()\n"
+    "print(json.dumps(paths))\n"
+)
+
+
+@app.post("/fs/pick")
+def pick_native_path(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Open a native Windows File or Folder dialog and return selected path(s)."""
+    mode = (payload or {}).get("mode", "folder")
+    if mode not in ("folder", "file"):
+        raise HTTPException(status_code=400, detail="mode must be 'folder' or 'file'")
+    repo_root = Path(__file__).resolve().parents[2].resolve()
+    raw_init = (payload or {}).get("initial_dir") or str(repo_root)
+    init_dir = Path(raw_init).resolve() if Path(raw_init).exists() else repo_root
+    if init_dir.is_file():
+        init_dir = init_dir.parent
+
+    try:
+        res = subprocess.run(
+            [sys.executable, "-c", _NATIVE_PICKER_CODE, mode, str(init_dir)],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return {"mode": mode, "paths": []}
+    if res.returncode != 0:
+        raise HTTPException(status_code=500, detail=res.stderr.strip() or "File dialog failed")
+    last_line = res.stdout.strip().splitlines()[-1] if res.stdout.strip() else "[]"
+    return {"mode": mode, "paths": json.loads(last_line)}
 
 
 # Mount the operator dashboard static UI at root

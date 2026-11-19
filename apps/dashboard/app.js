@@ -29,6 +29,9 @@ let currentModalTab = "chat";
 let modalPollTimer = null;
 const eventFingerprints = new Map();
 let lastFilesFingerprint = null;
+let scopeMode = "folder";
+let selectedContextFiles = [];
+let workspaceRootPath = "";
 
 document.addEventListener("DOMContentLoaded", () => {
   initDashboard();
@@ -36,7 +39,33 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(refreshData, 2000);
 });
 
+function startsWithCode(text) {
+  let first = "";
+  for (const raw of (text || "").split(/\r?\n/)) {
+    const s = raw.trim();
+    if (s) { first = s; break; }
+  }
+  if (!first) return false;
+  if (first.startsWith("```")) return true;
+  const kw = /^\s*(?:def |class |import |from\s+\S+\s+import |async\s+def |return\b|if\s+__name__|function\s+|const\s+|let\s+|var\s+|export\s+|interface\s+|type\s+|#include\s+|package\s+|public\s+|private\s+|SELECT\s+|INSERT\s+|UPDATE\s+|DELETE\s+|CREATE\s+TABLE\s+|<[a-zA-Z!])/;
+  const end = /(?:\{\s*|\}\s*;?|;\s*|\):\s*)$/;
+  return kw.test(first) || end.test(first);
+}
+
 function deriveTitleFromPrompt(desc) {
+  if (startsWithCode(desc)) {
+    let codeLine = "";
+    for (const raw of (desc || "").split(/\r?\n/)) {
+      const s = raw.trim();
+      if (s && !s.startsWith("```")) { codeLine = s.replace(/\s+/g, " "); break; }
+    }
+    if (codeLine) {
+      if (codeLine.length <= 52) return `Fix code: ${codeLine}`;
+      const sub = codeLine.slice(0, 51);
+      const idx = sub.lastIndexOf(" ");
+      return `Fix code: ${(idx > 0 ? sub.slice(0, idx) : sub)}…`;
+    }
+  }
   let firstLine = "";
   for (const raw of (desc || "").split(/\r?\n/)) {
     const cleaned = raw.replace(/^[#*\->\s]+/, "").trim();
@@ -58,6 +87,145 @@ function deriveTitleFromPrompt(desc) {
   return (idx > 0 ? sub.slice(0, idx) : sub).replace(/[,;:\-]+$/, "") + "…";
 }
 
+function setScopeMode(mode) {
+  scopeMode = mode === "files" ? "files" : "folder";
+  const btnF = document.getElementById("btnScopeFolder");
+  const btnS = document.getElementById("btnScopeFiles");
+  const btnAdd = document.getElementById("btnAddTarget");
+  const pathInput = document.getElementById("projectPath");
+  if (btnF) btnF.classList.toggle("active", scopeMode === "folder");
+  if (btnS) btnS.classList.toggle("active", scopeMode === "files");
+  if (btnAdd) btnAdd.style.display = scopeMode === "files" ? "inline-flex" : "none";
+  if (scopeMode === "folder") {
+    selectedContextFiles = [];
+    if (pathInput) pathInput.placeholder = workspaceRootPath || "C:\\Users\\ahmed\\AI-Coding-Command-Center (entire folder)";
+  } else if (pathInput) {
+    pathInput.placeholder = "Type or pick a relative file/subfolder (e.g. services/orchestrator/api.py)";
+  }
+  renderScopeChips();
+}
+
+function toRelativeTarget(pickedPath) {
+  const norm = (pickedPath || "").trim().replace(/\\/g, "/");
+  if (!norm) return "";
+  if (workspaceRootPath) {
+    const rootNorm = workspaceRootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (norm.toLowerCase().startsWith(rootNorm.toLowerCase() + "/")) {
+      return norm.slice(rootNorm.length + 1);
+    }
+  }
+  return norm;
+}
+
+function addTargetFileOrSubfolder(rawPath) {
+  const val = toRelativeTarget(rawPath);
+  if (!val) return;
+  if (scopeMode !== "files") setScopeMode("files");
+  if (!selectedContextFiles.includes(val)) {
+    selectedContextFiles.push(val);
+    renderScopeChips();
+  }
+}
+
+function removeTargetFile(idx) {
+  selectedContextFiles.splice(idx, 1);
+  if (selectedContextFiles.length === 0 && scopeMode === "files") {
+    renderScopeChips();
+  } else {
+    renderScopeChips();
+  }
+}
+
+function renderScopeChips() {
+  const container = document.getElementById("selectedFilesChips");
+  if (!container) return;
+  if (scopeMode === "folder" || selectedContextFiles.length === 0) {
+    const raw = (document.getElementById("projectPath")?.value || "").trim();
+    const label = raw || workspaceRootPath || "Default Project Folder (All files)";
+    container.innerHTML = scopeMode === "folder"
+      ? `<span class="file-chip file-chip-folder">📁 Entire Folder: ${escapeHtml(label)}</span>`
+      : `<span class="file-chip">No specific file selected yet — pick via Browse File or autocomplete</span>`;
+    return;
+  }
+  container.innerHTML = selectedContextFiles.map((f, idx) => `
+    <span class="file-chip">📄 ${escapeHtml(f)} <button type="button" class="file-chip-remove" onclick="removeTargetFile(${idx})" title="Remove target">✕</button></span>
+  `).join("");
+}
+
+async function loadWorkspacePaths(rootPath = null) {
+  const list = document.getElementById("workspacePathsList");
+  if (!list) return;
+  try {
+    const url = rootPath ? `${API_BASE}/fs/list?root=${encodeURIComponent(rootPath)}` : `${API_BASE}/fs/list`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    workspaceRootPath = data.root || workspaceRootPath;
+    list.innerHTML = (data.entries || []).map((e) => (
+      `<option value="${escapeHtml(e.path)}">${e.type === "folder" ? "📁 Folder" : "📄 File"}</option>`
+    )).join("");
+    renderScopeChips();
+  } catch (err) {
+    // Non-fatal if listing fails
+  }
+}
+
+async function pickNativeTarget(mode) {
+  const pathInput = document.getElementById("projectPath");
+  const initialDir = scopeMode === "folder" ? (pathInput?.value.trim() || workspaceRootPath) : workspaceRootPath;
+  try {
+    const res = await fetch(`${API_BASE}/fs/pick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, initial_dir: initialDir || null }),
+    });
+    if (!res.ok) throw new Error("Dialog request failed");
+    const data = await res.json();
+    const paths = data.paths || [];
+    if (paths.length === 0) return;
+    if (mode === "folder") {
+      setScopeMode("folder");
+      if (pathInput) pathInput.value = paths[0];
+      await loadWorkspacePaths(paths[0]);
+      renderScopeChips();
+    } else {
+      setScopeMode("files");
+      paths.forEach((p) => addTargetFileOrSubfolder(p));
+      if (pathInput) pathInput.value = "";
+    }
+  } catch (err) {
+    alert("Could not open native picker: " + err.message);
+  }
+}
+
+async function pasteOrWrapCodeSnippet() {
+  const descEl = document.getElementById("taskDesc");
+  if (!descEl) return;
+  let clip = "";
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    try { clip = await navigator.clipboard.readText(); } catch (_) { clip = ""; }
+  }
+  const start = descEl.selectionStart || 0;
+  const end = descEl.selectionEnd || 0;
+  const selected = descEl.value.slice(start, end);
+  let block = "";
+  if (selected.trim()) {
+    block = selected.includes("```") ? selected : `\`\`\`\n${selected.trim()}\n\`\`\``;
+    descEl.value = descEl.value.slice(0, start) + block + descEl.value.slice(end);
+  } else if (clip && clip.trim()) {
+    block = clip.includes("```") ? clip.trim() : `\`\`\`\n${clip.trim()}\n\`\`\``;
+    const prefix = descEl.value && !descEl.value.endsWith("\n") ? "\n" : "";
+    descEl.value = descEl.value + prefix + block + "\n";
+  } else if (descEl.value.trim() && !descEl.value.includes("```")) {
+    descEl.value = `\`\`\`\n${descEl.value.trim()}\n\`\`\`\n`;
+  } else {
+    const tpl = "```\n# Paste your code to fix here\n```\n";
+    descEl.value = descEl.value + tpl;
+  }
+  descEl.dispatchEvent(new Event("input"));
+  descEl.focus();
+}
+
 function setupEventListeners() {
   document.getElementById("btnRefresh").addEventListener("click", refreshData);
   document.getElementById("taskForm").addEventListener("submit", handleTaskSubmit);
@@ -73,7 +241,32 @@ function setupEventListeners() {
           : "Auto-generated from your prompt below (or type a custom title)";
       }
     });
+    descEl.addEventListener("keydown", (e) => {
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const s = descEl.selectionStart, end = descEl.selectionEnd;
+        descEl.value = descEl.value.slice(0, s) + "    " + descEl.value.slice(end);
+        descEl.selectionStart = descEl.selectionEnd = s + 4;
+      }
+    });
   }
+
+  document.getElementById("btnPasteCode")?.addEventListener("click", pasteOrWrapCodeSnippet);
+  document.getElementById("btnScopeFolder")?.addEventListener("click", () => setScopeMode("folder"));
+  document.getElementById("btnScopeFiles")?.addEventListener("click", () => setScopeMode("files"));
+  document.getElementById("btnPickFolder")?.addEventListener("click", () => pickNativeTarget("folder"));
+  document.getElementById("btnPickFile")?.addEventListener("click", () => pickNativeTarget("file"));
+
+  const pathInput = document.getElementById("projectPath");
+  document.getElementById("btnAddTarget")?.addEventListener("click", () => {
+    if (pathInput && pathInput.value.trim()) {
+      addTargetFileOrSubfolder(pathInput.value);
+      pathInput.value = "";
+    }
+  });
+  pathInput?.addEventListener("input", () => {
+    if (scopeMode === "folder") renderScopeChips();
+  });
 
   const btnClose = document.getElementById("btnCloseModal");
   if (btnClose) btnClose.addEventListener("click", closeModal);
@@ -94,6 +287,7 @@ async function initDashboard() {
     fetchApprovals(),
     fetchErrors(),
     fetchAudit(),
+    loadWorkspacePaths(),
   ]);
 }
 
@@ -226,8 +420,18 @@ async function handleTaskSubmit(e) {
   const description = document.getElementById("taskDesc").value.trim();
   const agentVal = document.getElementById("taskAgent").value;
   const policyVal = document.getElementById("taskPolicy").value;
-  const projectPath = document.getElementById("projectPath").value.trim();
+  const rawPath = document.getElementById("projectPath").value.trim();
   const useWorktree = document.getElementById("useWorktree").checked;
+
+  let projectPath = rawPath || null;
+  const contextFiles = [...selectedContextFiles];
+  if (scopeMode === "files") {
+    if (rawPath) {
+      const rel = toRelativeTarget(rawPath);
+      if (rel && !contextFiles.includes(rel)) contextFiles.push(rel);
+    }
+    projectPath = workspaceRootPath || null;
+  }
 
   const payload = {
     title: title || null,
@@ -235,7 +439,8 @@ async function handleTaskSubmit(e) {
     policy_mode: policyVal,
     use_worktree: useWorktree,
     preferred_agent: agentVal || null,
-    project_path: projectPath || null,
+    project_path: projectPath,
+    context_files: contextFiles,
   };
 
   try {
@@ -249,6 +454,7 @@ async function handleTaskSubmit(e) {
     document.getElementById("taskForm").reset();
     document.getElementById("taskTitle").placeholder = "Auto-generated from your prompt below (or type a custom title)";
     document.getElementById("useWorktree").checked = true;
+    setScopeMode("folder");
     await fetchTasks();
   } catch (err) {
     alert("Error submitting task: " + err.message);

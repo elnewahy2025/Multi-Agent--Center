@@ -16,6 +16,7 @@ from packages.contracts import (
     TaskRead,
     TaskStatus,
     derive_task_title,
+    normalize_task_prompt,
 )
 from services.agent_bridge import AgentRegistry
 from services.orchestrator.db import (
@@ -49,21 +50,24 @@ class TaskOrchestrator:
         now = datetime.utcnow()
 
         with get_db_session() as session:
-            # Ensure project exists if project_path provided
+            # Resolve directory vs single-file/subfolder scope
             project_id = request.project_id
-            if request.project_path and not project_id:
-                p_path = str(Path(request.project_path).resolve())
-                existing_p = session.query(ProjectModel).filter_by(root_path=p_path).first()
-                if existing_p:
-                    project_id = existing_p.id
-                else:
-                    project_id = f"proj_{uuid.uuid4().hex[:8]}"
-                    new_p = ProjectModel(
-                        id=project_id,
-                        name=Path(p_path).name,
-                        root_path=p_path,
-                    )
-                    session.add(new_p)
+            scoped_files = list(request.context_files)
+            if request.project_path or request.context_files:
+                project_root, scoped_files = self.workspace_mgr.resolve_target_path(
+                    request.project_path, request.context_files,
+                )
+                if request.project_path and not project_id:
+                    existing_p = session.query(ProjectModel).filter_by(root_path=project_root).first()
+                    if existing_p:
+                        project_id = existing_p.id
+                    else:
+                        project_id = f"proj_{uuid.uuid4().hex[:8]}"
+                        session.add(ProjectModel(
+                            id=project_id,
+                            name=Path(project_root).name,
+                            root_path=project_root,
+                        ))
 
             title = derive_task_title(request.description, request.title)
             model = TaskModel(
@@ -78,7 +82,7 @@ class TaskOrchestrator:
                 updated_at=now,
             )
             model.set_metadata({
-                "context_files": request.context_files,
+                "context_files": scoped_files,
                 "timeout_seconds": request.timeout_seconds,
                 "use_worktree": request.use_worktree,
             })
@@ -173,17 +177,18 @@ class TaskOrchestrator:
             )
             session.add(run_model)
 
+        context_files = task.metadata.get("context_files", [])
         req = AgentExecutionRequest(
             task_id=task_id,
             run_id=run_id,
-            prompt=task.description,
+            prompt=normalize_task_prompt(task.description, context_files),
             working_directory=working_dir,
             # WorkspaceManager already points working_directory at the isolated worktree;
             # leave worktree_name=None so CLIs do not spawn a second worktree.
             worktree_name=None,
             policy_mode=task.policy_mode,
             timeout_seconds=task.metadata.get("timeout_seconds", 3600),
-            context_files=task.metadata.get("context_files", []),
+            context_files=context_files,
         )
 
         # Dispatch execution with live event streaming

@@ -15,6 +15,9 @@ from packages.contracts import (
     RiskLevel,
     TaskCreate,
     TaskStatus,
+    derive_task_title,
+    looks_like_code_snippet,
+    normalize_task_prompt,
 )
 
 
@@ -63,6 +66,17 @@ class TestContracts(unittest.TestCase):
         )
         self.assertEqual(req.decision, ApprovalDecision.PENDING)
         self.assertEqual(req.risk_level, RiskLevel.HIGH)
+
+    def test_pasted_code_detection_title_and_normalization(self):
+        raw_code = "def broken(x):\n    return x / 0"
+        self.assertTrue(looks_like_code_snippet(raw_code))
+        self.assertFalse(looks_like_code_snippet("Review authentication flow and write unit tests."))
+        self.assertEqual(derive_task_title(raw_code), "Fix code: def broken(x):")
+
+        normalized = normalize_task_prompt(raw_code, ["services/orchestrator/api.py"])
+        self.assertIn("Target File(s) / Directory Scope: services/orchestrator/api.py", normalized)
+        self.assertIn("Inspect, debug, and fix the following pasted code snippet.", normalized)
+        self.assertIn(raw_code, normalized)
 
 
 if __name__ == "__main__":
