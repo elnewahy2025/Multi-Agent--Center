@@ -1,6 +1,8 @@
 """Unit tests for collaborative multi-agent workflow models and transitions."""
 
 import tempfile
+import threading
+import time
 import unittest
 import uuid
 from datetime import datetime
@@ -10,6 +12,7 @@ from packages.contracts import (
     AgentExecutionRequest,
     AgentExecutionResult,
     AgentType,
+    ApprovalDecision,
     PolicyMode,
     TaskStatus,
     WorkflowMessage,
@@ -18,6 +21,7 @@ from packages.contracts import (
 )
 from services.orchestrator.db import (
     AgentEventModel,
+    ApprovalModel,
     AuditLogModel,
     ErrorLogModel,
     TaskModel,
@@ -100,12 +104,49 @@ class TestCollaborativeWorkflow(unittest.TestCase):
         self.assertFalse(CollaborativeWorkflowEngine._is_verification_approved("Missing tests.\nVERDICT: REJECTED"))
         self.assertFalse(CollaborativeWorkflowEngine._is_verification_approved("Looks mostly fine, no verdict line."))
 
-    def test_rework_loop_and_max_attempt_failure(self):
+    @staticmethod
+    def _cleanup_task(task_id: str) -> None:
+        with get_db_session() as s:
+            s.query(AgentEventModel).filter_by(task_id=task_id).delete()
+            s.query(ApprovalModel).filter_by(task_id=task_id).delete()
+            s.query(ErrorLogModel).filter_by(task_id=task_id).delete()
+            s.query(AuditLogModel).filter_by(task_id=task_id).delete()
+            s.query(WorkflowRunModel).filter_by(task_id=task_id).delete()
+            s.query(TaskModel).filter_by(id=task_id).delete()
+
+    @staticmethod
+    def _spawn_approval_decider(task_id: str, expected_action: str, decision: ApprovalDecision,
+                                reason: str | None = None):
+        """Wait for a PENDING ApprovalModel for task_id, record observations, then decide it."""
+        observed = {"saw_awaiting": False, "action_type": None}
+
+        def _worker():
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                with get_db_session() as s:
+                    t = s.query(TaskModel).filter_by(id=task_id).first()
+                    apr = s.query(ApprovalModel).filter_by(
+                        task_id=task_id, decision=ApprovalDecision.PENDING.value
+                    ).first()
+                    if t and t.status == TaskStatus.AWAITING_APPROVAL.value and apr:
+                        observed["saw_awaiting"] = True
+                        observed["action_type"] = apr.action_type
+                        if apr.action_type == expected_action:
+                            apr.decision = decision.value
+                            apr.decided_by = "test-operator"
+                            apr.reason = reason
+                            apr.decided_at = datetime.utcnow()
+                            return
+                time.sleep(0.03)
+
+        th = threading.Thread(target=_worker, daemon=True)
+        th.start()
+        return th, observed
+
+    def _build_stub_engine(self, anti_handler, opc_handler, wt_path: Path, max_attempts: int = 2):
         class StubAdapter:
             def __init__(self, agent_type, handler):
-                self.agent_type = agent_type
-                self.handler = handler
-                self.requests = []
+                self.agent_type, self.handler, self.requests = agent_type, handler, []
 
             def execute(self, req: AgentExecutionRequest, on_event=None):
                 self.requests.append(req)
@@ -113,7 +154,7 @@ class TestCollaborativeWorkflow(unittest.TestCase):
                 return AgentExecutionResult(
                     task_id=req.task_id, run_id=req.run_id, agent_type=self.agent_type,
                     status=TaskStatus.COMPLETED, exit_code=0, stdout=out, stderr="",
-                    duration_seconds=0.1, structured_output={"final_text": out},
+                    duration_seconds=0.05, structured_output={"final_text": out},
                 )
 
         class StubRegistry:
@@ -124,89 +165,133 @@ class TestCollaborativeWorkflow(unittest.TestCase):
                 return self.adapters.get(agent_type)
 
         class StubWorkspaceMgr:
-            def __init__(self, wt_dir: Path):
-                self.wt_dir = wt_dir
-
             def create_worktree(self, project_root, task_id, branch_name=None):
-                return self.wt_dir
+                return wt_path
 
             def get_changed_files(self, working_dir: Path):
                 return [{"path": "app.py", "status": "MODIFIED", "diff": "+fixed"}]
 
-        with tempfile.TemporaryDirectory() as tmp:
-            wt_path = Path(tmp)
-            # Case A: Round 1 Stage 4 rejects, Round 2 Stage 3 fixes and Stage 4 approves
-            anti = StubAdapter(AgentType.ANTIGRAVITY, lambda _r, n: (
-                "Plan ready." if n == 1 else (
-                    "VERDICT: REJECTED — missing test" if n == 2 else "VERDICT: APPROVED"
-                )
-            ))
-            opc = StubAdapter(AgentType.OPENCODE, lambda _r, n: (
-                "AGREED" if n == 1 else f"Applied changes pass {n}"
-            ))
-            engine = CollaborativeWorkflowEngine(
-                registry=StubRegistry({AgentType.ANTIGRAVITY: anti, AgentType.OPENCODE: opc}),
-                workspace_mgr=StubWorkspaceMgr(wt_path),
-                max_attempts=2,
-            )
+        anti = StubAdapter(AgentType.ANTIGRAVITY, anti_handler)
+        opc = StubAdapter(AgentType.OPENCODE, opc_handler)
+        engine = CollaborativeWorkflowEngine(
+            registry=StubRegistry({AgentType.ANTIGRAVITY: anti, AgentType.OPENCODE: opc}),
+            workspace_mgr=StubWorkspaceMgr(),
+            max_attempts=max_attempts,
+            poll_interval_seconds=0.03,
+            approval_timeout_seconds=5,
+        )
+        return engine, anti, opc
 
+    def test_rework_loop_succeeds_automatically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine, anti, opc = self._build_stub_engine(
+                lambda _r, n: "Plan ready." if n == 1 else (
+                    "VERDICT: REJECTED — missing test" if n == 2 else "VERDICT: APPROVED"
+                ),
+                lambda _r, n: "AGREED" if n == 1 else f"Applied changes pass {n}",
+                Path(tmp),
+            )
             task_id = f"tsk_{uuid.uuid4().hex[:8]}"
             with get_db_session() as s:
                 s.add(TaskModel(id=task_id, title="Fix bug", description="Fix and test", status="PENDING"))
-
             try:
                 wf = engine.run_collaborative_workflow(task_id)
                 self.assertEqual(wf.status, "COMPLETED")
                 self.assertTrue(wf.is_verified)
-                self.assertEqual(len(anti.requests), 3)  # Stage 1 + Stage 4 (x2)
-                self.assertEqual(len(opc.requests), 3)   # Stage 2 + Stage 3 (x2)
-                # Read-only in Stages 1 & 2, isolated cwd with no --worktree in all stages
+                self.assertEqual(len(anti.requests), 3)
+                self.assertEqual(len(opc.requests), 3)
                 self.assertEqual(anti.requests[0].policy_mode, PolicyMode.STRICT)
                 self.assertEqual(opc.requests[0].policy_mode, PolicyMode.STRICT)
                 self.assertTrue(all(r.worktree_name is None for r in anti.requests + opc.requests))
-                self.assertTrue(all(r.working_directory == str(wt_path) for r in anti.requests + opc.requests))
-                # Round 2 Stage 3 prompt received Round 1's rejection details
+                self.assertTrue(all(r.working_directory == str(Path(tmp)) for r in anti.requests + opc.requests))
                 self.assertIn("VERDICT: REJECTED — missing test", opc.requests[2].prompt)
             finally:
-                with get_db_session() as s:
-                    s.query(AgentEventModel).filter_by(task_id=task_id).delete()
-                    s.query(ErrorLogModel).filter_by(task_id=task_id).delete()
-                    s.query(AuditLogModel).filter_by(task_id=task_id).delete()
-                    s.query(WorkflowRunModel).filter_by(task_id=task_id).delete()
-                    s.query(TaskModel).filter_by(id=task_id).delete()
+                self._cleanup_task(task_id)
 
-            # Case B: Still rejected after max_attempts -> FAILED + ErrorLogModel
-            anti_fail = StubAdapter(AgentType.ANTIGRAVITY, lambda _r, n: (
-                "Plan ready." if n == 1 else "VERDICT: REJECTED — still broken"
-            ))
-            opc_fail = StubAdapter(AgentType.OPENCODE, lambda _r, n: "AGREED" if n == 1 else "Tried fix")
-            engine_fail = CollaborativeWorkflowEngine(
-                registry=StubRegistry({AgentType.ANTIGRAVITY: anti_fail, AgentType.OPENCODE: opc_fail}),
-                workspace_mgr=StubWorkspaceMgr(wt_path),
-                max_attempts=2,
+    def test_pre_execution_approval_gate_and_operator_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine, _anti, opc = self._build_stub_engine(
+                lambda _r, n: "Plan proposes migrating DB driver.\nAPPROVAL_REQUIRED: YES" if n == 1 else "VERDICT: APPROVED",
+                lambda _r, n: "AGREED" if n == 1 else "Executed safely",
+                Path(tmp),
             )
-
-            task_fail_id = f"tsk_{uuid.uuid4().hex[:8]}"
+            task_id = f"tsk_{uuid.uuid4().hex[:8]}"
             with get_db_session() as s:
-                s.add(TaskModel(id=task_fail_id, title="Broken task", description="Fails verify", status="PENDING"))
-
+                s.add(TaskModel(
+                    id=task_id, title="Audit dependencies", description="Check requirements",
+                    policy_mode=PolicyMode.ASK.value, status="PENDING",
+                ))
+            th, obs = self._spawn_approval_decider(
+                task_id, "PRE_EXECUTION_APPROVAL", ApprovalDecision.APPROVED,
+                reason="Only pin upper bounds, do not touch api.py",
+            )
             try:
-                wf_fail = engine_fail.run_collaborative_workflow(task_fail_id)
+                wf = engine.run_collaborative_workflow(task_id)
+                th.join(timeout=2.0)
+                self.assertTrue(obs["saw_awaiting"])
+                self.assertEqual(obs["action_type"], "PRE_EXECUTION_APPROVAL")
+                self.assertEqual(wf.status, "COMPLETED")
+                self.assertTrue(wf.is_verified)
+                self.assertIn("Only pin upper bounds, do not touch api.py", opc.requests[1].prompt)
+            finally:
+                self._cleanup_task(task_id)
+
+    def test_unresolved_issues_escalation_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # 1) Denied at Gate B -> FAILED + ErrorLogModel
+            engine_deny, _anti_d, _opc_d = self._build_stub_engine(
+                lambda _r, n: "Plan ready." if n == 1 else "VERDICT: REJECTED — still broken",
+                lambda _r, n: "AGREED" if n == 1 else "Tried fix",
+                Path(tmp), max_attempts=2,
+            )
+            task_deny = f"tsk_{uuid.uuid4().hex[:8]}"
+            with get_db_session() as s:
+                s.add(TaskModel(id=task_deny, title="Broken task", description="Fails verify", status="PENDING"))
+            th_d, obs_d = self._spawn_approval_decider(
+                task_deny, "UNRESOLVED_ISSUES_DECISION", ApprovalDecision.DENIED, reason="Stop and let me inspect",
+            )
+            try:
+                wf_fail = engine_deny.run_collaborative_workflow(task_deny)
+                th_d.join(timeout=2.0)
+                self.assertTrue(obs_d["saw_awaiting"])
+                self.assertEqual(obs_d["action_type"], "UNRESOLVED_ISSUES_DECISION")
                 self.assertEqual(wf_fail.status, "FAILED")
                 self.assertFalse(wf_fail.is_verified)
                 with get_db_session() as s:
-                    t_row = s.query(TaskModel).filter_by(id=task_fail_id).first()
-                    err_row = s.query(ErrorLogModel).filter_by(task_id=task_fail_id).first()
-                    self.assertEqual(t_row.status, "FAILED")
+                    self.assertEqual(s.query(TaskModel).filter_by(id=task_deny).first().status, "FAILED")
+                    err_row = s.query(ErrorLogModel).filter_by(task_id=task_deny).first()
                     self.assertIsNotNone(err_row)
                     self.assertEqual(err_row.source, "ANTIGRAVITY_VERIFICATION")
             finally:
-                with get_db_session() as s:
-                    s.query(AgentEventModel).filter_by(task_id=task_fail_id).delete()
-                    s.query(ErrorLogModel).filter_by(task_id=task_fail_id).delete()
-                    s.query(AuditLogModel).filter_by(task_id=task_fail_id).delete()
-                    s.query(WorkflowRunModel).filter_by(task_id=task_fail_id).delete()
-                    s.query(TaskModel).filter_by(id=task_fail_id).delete()
+                self._cleanup_task(task_deny)
+
+            # 2) Approved at Gate B with operator guidance -> runs extra Stage 3->4 cycle and completes
+            engine_ok, anti_ok, opc_ok = self._build_stub_engine(
+                lambda _r, n: (
+                    "Plan ready." if n == 1
+                    else ("VERDICT: APPROVED" if n == 4 else "VERDICT: REJECTED — missing README divider")
+                ),
+                lambda _r, n: "AGREED" if n == 1 else f"Fix round {n}",
+                Path(tmp), max_attempts=2,
+            )
+            task_ok = f"tsk_{uuid.uuid4().hex[:8]}"
+            with get_db_session() as s:
+                s.add(TaskModel(id=task_ok, title="Needs extra guidance", description="Add divider", status="PENDING"))
+            th_ok, obs_ok = self._spawn_approval_decider(
+                task_ok, "UNRESOLVED_ISSUES_DECISION", ApprovalDecision.APPROVED,
+                reason="Add '---' separator above section 6 in README.md",
+            )
+            try:
+                wf_ok = engine_ok.run_collaborative_workflow(task_ok)
+                th_ok.join(timeout=2.0)
+                self.assertTrue(obs_ok["saw_awaiting"])
+                self.assertEqual(wf_ok.status, "COMPLETED")
+                self.assertTrue(wf_ok.is_verified)
+                self.assertEqual(len(anti_ok.requests), 4)  # Stage 1 + Stage 4 (x3)
+                self.assertEqual(len(opc_ok.requests), 4)   # Stage 2 + Stage 3 (x3)
+                self.assertIn("Add '---' separator above section 6 in README.md", opc_ok.requests[3].prompt)
+            finally:
+                self._cleanup_task(task_ok)
 
 
 if __name__ == "__main__":

@@ -122,6 +122,13 @@ async function fetchTasks() {
           <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
           <button class="btn btn-sm btn-stop" onclick="stopTask('${t.id}')">Stop ⏹</button>
         `;
+      } else if (t.status === "AWAITING_APPROVAL") {
+        actionHtml = `
+          <span style="font-size:0.75rem; color:#f2cc60; margin-right:0.3rem;">⏸ Awaiting You</span>
+          <button class="btn btn-sm btn-team" onclick="viewTaskDetails('${t.id}', 'chat')">⚖️ Decide</button>
+          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
+          <button class="btn btn-sm btn-stop" onclick="stopTask('${t.id}')">Stop ⏹</button>
+        `;
       } else if (t.status === "COMPLETED") {
         actionHtml = `
           <button class="btn btn-sm btn-view" onclick="viewTaskDetails('${t.id}', 'chat')">Log</button>
@@ -425,16 +432,49 @@ async function loadTaskDetails(taskId) {
   const content = document.getElementById("modalContent");
 
   try {
-    const [wfRes, evRes] = await Promise.all([
+    const [wfRes, evRes, aprRes] = await Promise.all([
       fetch(`${API_BASE}/tasks/${taskId}/workflow`),
       fetch(`${API_BASE}/tasks/${taskId}/events`),
+      fetch(`${API_BASE}/approvals`),
     ]);
     const workflow = wfRes.ok ? await wfRes.json() : null;
     const evPayload = evRes.ok ? await evRes.json() : { events: [] };
     const events = evPayload.events || [];
+    const allApprovals = aprRes.ok ? await aprRes.json() : [];
+    const pendingApproval = allApprovals.find((a) => a.task_id === taskId);
 
     renderStageStepper(workflow);
     renderActivityFeed(events);
+
+    const focused = document.activeElement;
+    if (focused && content.contains(focused) && focused.classList.contains("approval-note-input")) {
+      return;
+    }
+
+    const existingModalNotes = {};
+    content.querySelectorAll(".approval-note-input").forEach((inp) => {
+      existingModalNotes[inp.id] = inp.value;
+    });
+
+    let approvalBannerHtml = "";
+    if (pendingApproval) {
+      approvalBannerHtml = `
+        <div class="modal-approval-box">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <strong style="color:#f2cc60;">⏸ Human Decision Required: ${escapeHtml(pendingApproval.action_type)}</strong>
+            <span class="badge badge-warning">${escapeHtml(pendingApproval.risk_level)}</span>
+          </div>
+          <div style="font-size:0.82rem; color:var(--text-bright);">${escapeHtml(pendingApproval.description)}</div>
+          <div style="font-family:monospace; font-size:0.74rem; color:#79c0ff; word-break:break-all;">${escapeHtml(pendingApproval.command_or_path)}</div>
+          <input type="text" class="approval-note-input" id="modalAprNote_${escapeHtml(pendingApproval.id)}"
+            placeholder="Optional instructions for agents (e.g. skip driver upgrade, fix test)...">
+          <div class="approval-actions">
+            <button class="btn btn-approve" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'APPROVED')">Approve &amp; Continue ✓</button>
+            <button class="btn btn-deny" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'DENIED')">Deny &amp; Stop ✕</button>
+          </div>
+        </div>
+      `;
+    }
 
     if (workflow) {
       document.getElementById("modalTitle").textContent = "Bilateral Teamwork: Antigravity ↔ OpenCode";
@@ -451,9 +491,9 @@ async function loadTaskDetails(taskId) {
         <strong>Verification:</strong> ${verifyHtml}
       `;
 
-      let alertHtml = "";
+      let alertHtml = approvalBannerHtml;
       if (workflow.status === "FAILED") {
-        alertHtml = `
+        alertHtml += `
           <div style="background:rgba(218,54,51,0.18); border:1px solid #da3633; border-radius:6px; padding:0.75rem 1rem; color:#f85149; margin-bottom:0.5rem;">
             <strong>🚨 Workflow Execution Halted with Error:</strong>
             <div style="margin-top:0.25rem; font-size:0.8rem; color:#f0f6fc;">${escapeHtml(workflow.verification_report || 'An error occurred during agent execution.')}</div>
@@ -482,6 +522,10 @@ async function loadTaskDetails(taskId) {
       } else {
         content.innerHTML = alertHtml;
       }
+      Object.entries(existingModalNotes).forEach(([id, val]) => {
+        const inp = document.getElementById(id);
+        if (inp) inp.value = val;
+      });
       return;
     }
 
@@ -492,7 +536,7 @@ async function loadTaskDetails(taskId) {
 
     if (!runs || runs.length === 0) {
       meta.textContent = `Task ID: ${taskId}`;
-      content.innerHTML = events.length ? "" : `<div class="empty-state">No run records found for this task.</div>`;
+      content.innerHTML = approvalBannerHtml + (events.length ? "" : `<div class="empty-state">No run records found for this task.</div>`);
       return;
     }
 
@@ -510,7 +554,7 @@ async function loadTaskDetails(taskId) {
     if (latest.error_reason) text += "=== ERROR ===\n" + latest.error_reason + "\n";
 
     if (events.length > 0) {
-      content.innerHTML = text ? `
+      content.innerHTML = approvalBannerHtml + (text ? `
         <details class="activity-tool-card">
           <summary class="activity-tool-header">
             <span class="tool-name-pill">RAW LOG</span>
@@ -518,10 +562,14 @@ async function loadTaskDetails(taskId) {
           </summary>
           <div class="activity-tool-body"><pre>${escapeHtml(text)}</pre></div>
         </details>
-      ` : "";
+      ` : "");
     } else {
-      content.innerHTML = `<pre class="output-terminal">${escapeHtml(text || "No console output recorded yet. Agent is initializing...")}</pre>`;
+      content.innerHTML = approvalBannerHtml + `<pre class="output-terminal">${escapeHtml(text || "No console output recorded yet. Agent is initializing...")}</pre>`;
     }
+    Object.entries(existingModalNotes).forEach(([id, val]) => {
+      const inp = document.getElementById(id);
+      if (inp) inp.value = val;
+    });
   } catch (err) {
     content.innerHTML = `<pre class="output-terminal">Failed to fetch task details: ${escapeHtml(err.message)}</pre>`;
   }
@@ -630,6 +678,13 @@ async function fetchApprovals() {
   const container = document.getElementById("approvalsList");
   const badge = document.getElementById("approvalsBadge");
   try {
+    if (document.activeElement && container.contains(document.activeElement)
+        && document.activeElement.classList.contains("approval-note-input")) {
+      return;
+    }
+    const existingNotes = {};
+    container.querySelectorAll(".approval-note-input").forEach((inp) => { existingNotes[inp.id] = inp.value; });
+
     const res = await fetch(`${API_BASE}/approvals`);
     const approvals = await res.json();
     badge.textContent = approvals.length;
@@ -647,12 +702,19 @@ async function fetchApprovals() {
         </div>
         <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.3rem;">${escapeHtml(a.description)}</div>
         <div style="font-family:monospace; font-size:0.75rem; color:#79c0ff; margin-bottom:0.5rem; word-break:break-all;">${escapeHtml(a.command_or_path)}</div>
+        <input type="text" class="approval-note-input" id="aprNote_${escapeHtml(a.id)}"
+          placeholder="Optional instructions for agents (e.g. skip driver upgrade, fix test)...">
         <div class="approval-actions">
-          <button class="btn btn-approve" onclick="decideApproval('${a.id}', 'APPROVED')">Approve ✓</button>
-          <button class="btn btn-deny" onclick="decideApproval('${a.id}', 'DENIED')">Deny ✕</button>
+          <button class="btn btn-approve" onclick="decideApproval('${escapeHtml(a.id)}', 'APPROVED')">Approve &amp; Continue ✓</button>
+          <button class="btn btn-deny" onclick="decideApproval('${escapeHtml(a.id)}', 'DENIED')">Deny &amp; Stop ✕</button>
         </div>
       </div>
     `).join("");
+
+    Object.entries(existingNotes).forEach(([id, val]) => {
+      const inp = document.getElementById(id);
+      if (inp) inp.value = val;
+    });
   } catch (err) {
     container.innerHTML = `<p class="empty-state">Unable to load approvals.</p>`;
   }
@@ -660,14 +722,20 @@ async function fetchApprovals() {
 
 async function decideApproval(approvalId, decision) {
   try {
+    const modalNote = document.getElementById(`modalAprNote_${approvalId}`);
+    const listNote = document.getElementById(`aprNote_${approvalId}`);
+    const note = ((modalNote && modalNote.value) || (listNote && listNote.value) || "").trim();
+
     const res = await fetch(`${API_BASE}/approvals/${approvalId}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision, decided_by: "Ahmed" }),
+      body: JSON.stringify({ decision, decided_by: "Ahmed", reason: note || null }),
     });
     if (!res.ok) throw new Error("Decision submission failed");
-    await fetchApprovals();
-    await fetchAudit();
+    await Promise.all([fetchApprovals(), fetchTasks(), fetchAudit()]);
+    if (activeModalTaskId) {
+      await loadTaskDetails(activeModalTaskId);
+    }
   } catch (err) {
     alert("Approval error: " + err.message);
   }

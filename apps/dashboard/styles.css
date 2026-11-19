@@ -197,8 +197,10 @@ input[type="text"]:focus, select:focus, textarea:focus {
 }
 .status-PENDING { background: rgba(210, 153, 34, 0.2); color: var(--warning-color); }
 .status-RUNNING { background: rgba(88, 166, 255, 0.2); color: var(--accent-color); }
+.status-AWAITING_APPROVAL { background: rgba(210, 153, 34, 0.25); color: #f2cc60; border: 1px solid rgba(210, 153, 34, 0.5); }
 .status-COMPLETED { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
 .status-FAILED { background: rgba(218, 54, 51, 0.2); color: var(--danger-color); }
+.status-CANCELLED { background: rgba(139, 148, 158, 0.2); color: #8b949e; }
 
 .empty-state { text-align: center; color: var(--text-muted); padding: 1.5rem; font-size: 0.85rem; }
 .audit-card { max-height: 220px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; }
@@ -621,4 +623,31 @@ input[type="text"]:focus, select:focus, textarea:focus {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-top: 0.35rem;
+}
+
+/* Human-in-the-Loop Interactive Approval Gate */
+.modal-approval-box {
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.55);
+  border-left: 4px solid #f2cc60;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.approval-note-input {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0.45rem 0.65rem;
+  color: var(--text-bright);
+  font-size: 0.8rem;
+  margin: 0.25rem 0 0.45rem;
+}
+.approval-note-input:focus {
+  outline: none;
+  border-color: #f2cc60;
 }
