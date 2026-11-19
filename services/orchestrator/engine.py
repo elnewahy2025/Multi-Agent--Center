@@ -176,7 +176,9 @@ class TaskOrchestrator:
             run_id=run_id,
             prompt=task.description,
             working_directory=working_dir,
-            worktree_name=worktree_path.name if worktree_path else None,
+            # WorkspaceManager already points working_directory at the isolated worktree;
+            # leave worktree_name=None so CLIs do not spawn a second worktree.
+            worktree_name=None,
             policy_mode=task.policy_mode,
             timeout_seconds=task.metadata.get("timeout_seconds", 3600),
             context_files=task.metadata.get("context_files", []),

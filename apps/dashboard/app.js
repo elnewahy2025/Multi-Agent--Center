@@ -438,10 +438,17 @@ async function loadTaskDetails(taskId) {
 
     if (workflow) {
       document.getElementById("modalTitle").textContent = "Bilateral Teamwork: Antigravity ↔ OpenCode";
+      const verifyHtml = workflow.is_verified
+        ? '<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by Antigravity</span>'
+        : (workflow.status === "FAILED"
+            ? '<span style="color:#f85149; font-weight:600;">✕ Rejected / Failed</span>'
+            : (workflow.status === "CANCELLED"
+                ? '<span style="color:#8b949e; font-weight:600;">⏹ Cancelled</span>'
+                : '<span style="color:#d29922;">In Progress...</span>'));
       meta.innerHTML = `
         <strong>Current Stage:</strong> <span class="phase-badge">${workflow.current_phase}</span> &bull;
         <strong>Status:</strong> <span class="status-badge status-${workflow.status}">${workflow.status}</span> &bull;
-        <strong>Verification:</strong> ${workflow.is_verified ? '<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by Antigravity</span>' : '<span style="color:#d29922;">In Progress...</span>'}
+        <strong>Verification:</strong> ${verifyHtml}
       `;
 
       let alertHtml = "";
