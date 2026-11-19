@@ -1,0 +1,38 @@
+# Environment and Secrets
+.env
+*.env
+*.env.*
+!*.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Local Data and Worktrees
+data/*.db
+data/*.sqlite
+data/*.log
+workspace/worktrees/*
+!workspace/worktrees/.gitkeep
+workspace/projects/*
+!workspace/projects/.gitkeep
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+[Dd]esktop.ini
+
+# Logs
+*.log
+logs/

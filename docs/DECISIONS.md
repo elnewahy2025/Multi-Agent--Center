@@ -16,6 +16,9 @@ This document separates owner-approved choices from proposals and unresolved que
 | ADR-008 | PostgreSQL 18 on port 5433 selected for Command Center persistence. | Dedicated database `command_center` created and verified. |
 | ADR-009 | OpenCode SQLite state protected via atomic SQLite online backup. | Verified backup script `scripts/backup_opencode.py` created and tested with PRAGMA quick_check passing. |
 | ADR-010 | OpenCode CLI conflict resolved via user-local wrapper in `.local\bin`. | Prioritizes Desktop CLI 2.3.2 over obsolete npm 1.19.6 without destructive uninstallation. |
+| ADR-011 | Python 3.11 with Pydantic contracts selected for orchestrator foundation. | Verified and implemented under `packages/contracts` and `services/orchestrator`. |
+| ADR-012 | FastAPI selected for local Command Center HTTP/REST control plane. | Verified and implemented under `services/orchestrator/api.py`. |
+| ADR-013 | Isolated Git worktrees managed dynamically by WorkspaceManager. | Implemented under `services/orchestrator/workspace.py` with uncommitted changes protection. |
 
 ## Verified environment facts
 
