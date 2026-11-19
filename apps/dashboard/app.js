@@ -32,6 +32,15 @@ let lastFilesFingerprint = null;
 let scopeMode = "folder";
 let selectedContextFiles = [];
 let workspaceRootPath = "";
+let repoRootPath = "";
+let selectedFolderRoot = "";
+let explorerOpen = false;
+let explorerMode = "folder";
+let explorerCurrentDir = "";
+let explorerParentDir = null;
+let explorerSearchTimer = null;
+let currentExplorerFolders = [];
+let currentExplorerFiles = [];
 
 document.addEventListener("DOMContentLoaded", () => {
   initDashboard();
@@ -40,15 +49,34 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function startsWithCode(text) {
+  const lines = (text || "").split(/\r?\n/);
   let first = "";
-  for (const raw of (text || "").split(/\r?\n/)) {
+  for (const raw of lines) {
     const s = raw.trim();
     if (s) { first = s; break; }
   }
   if (!first) return false;
-  if (first.startsWith("```")) return true;
   const kw = /^\s*(?:def |class |import |from\s+\S+\s+import |async\s+def |return\b|if\s+__name__|function\s+|const\s+|let\s+|var\s+|export\s+|interface\s+|type\s+|#include\s+|package\s+|public\s+|private\s+|SELECT\s+|INSERT\s+|UPDATE\s+|DELETE\s+|CREATE\s+TABLE\s+|<[a-zA-Z!])/;
   const end = /(?:\{\s*|\}\s*;?|;\s*|\):\s*)$/;
+  const syntax = /(?:[=(){}\[\];]|<\/|\b(?:def|class|import|function|const|let)\s+)/;
+  if (first.startsWith("```")) {
+    let sawOpen = false;
+    for (const raw of lines) {
+      const s = raw.trim();
+      if (!sawOpen) {
+        if (s.startsWith("```")) {
+          sawOpen = true;
+          const tag = s.slice(3).trim();
+          if (tag && !tag.includes(" ") && !tag.includes("```")) return true;
+        }
+        continue;
+      }
+      if (s.startsWith("```")) break;
+      if (!s) continue;
+      if (kw.test(s) || end.test(s) || syntax.test(s)) return true;
+    }
+    return false;
+  }
   return kw.test(first) || end.test(first);
 }
 
@@ -69,7 +97,7 @@ function deriveTitleFromPrompt(desc) {
   let firstLine = "";
   for (const raw of (desc || "").split(/\r?\n/)) {
     const cleaned = raw.replace(/^[#*\->\s]+/, "").trim();
-    if (cleaned) { firstLine = cleaned; break; }
+    if (cleaned && !cleaned.startsWith("```")) { firstLine = cleaned; break; }
   }
   if (!firstLine) return "";
   const filler = /^(?:please|can you|could you|would you|i want(?: you)? to|help me|task\s*:)\s+/i;
@@ -88,6 +116,7 @@ function deriveTitleFromPrompt(desc) {
 }
 
 function setScopeMode(mode) {
+  const prevMode = scopeMode;
   scopeMode = mode === "files" ? "files" : "folder";
   const btnF = document.getElementById("btnScopeFolder");
   const btnS = document.getElementById("btnScopeFiles");
@@ -98,8 +127,16 @@ function setScopeMode(mode) {
   if (btnAdd) btnAdd.style.display = scopeMode === "files" ? "inline-flex" : "none";
   if (scopeMode === "folder") {
     selectedContextFiles = [];
+    if (prevMode === "files" && pathInput && !pathInput.value.trim() && selectedFolderRoot) {
+      pathInput.value = selectedFolderRoot;
+    }
     if (pathInput) pathInput.placeholder = workspaceRootPath || "C:\\Users\\ahmed\\AI-Coding-Command-Center (entire folder)";
   } else if (pathInput) {
+    const curVal = pathInput.value.trim();
+    if (prevMode === "folder" && curVal && (curVal === workspaceRootPath || curVal === selectedFolderRoot)) {
+      selectedFolderRoot = curVal;
+      pathInput.value = "";
+    }
     pathInput.placeholder = "Type or pick a relative file/subfolder (e.g. services/orchestrator/api.py)";
   }
   renderScopeChips();
@@ -108,8 +145,10 @@ function setScopeMode(mode) {
 function toRelativeTarget(pickedPath) {
   const norm = (pickedPath || "").trim().replace(/\\/g, "/");
   if (!norm) return "";
-  if (workspaceRootPath) {
-    const rootNorm = workspaceRootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const activeBase = selectedFolderRoot || workspaceRootPath || repoRootPath;
+  if (activeBase) {
+    const rootNorm = activeBase.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (norm.toLowerCase() === rootNorm.toLowerCase()) return "";
     if (norm.toLowerCase().startsWith(rootNorm.toLowerCase() + "/")) {
       return norm.slice(rootNorm.length + 1);
     }
@@ -129,11 +168,8 @@ function addTargetFileOrSubfolder(rawPath) {
 
 function removeTargetFile(idx) {
   selectedContextFiles.splice(idx, 1);
-  if (selectedContextFiles.length === 0 && scopeMode === "files") {
-    renderScopeChips();
-  } else {
-    renderScopeChips();
-  }
+  renderScopeChips();
+  if (explorerOpen) renderExplorerRows();
 }
 
 function renderScopeChips() {
@@ -141,10 +177,10 @@ function renderScopeChips() {
   if (!container) return;
   if (scopeMode === "folder" || selectedContextFiles.length === 0) {
     const raw = (document.getElementById("projectPath")?.value || "").trim();
-    const label = raw || workspaceRootPath || "Default Project Folder (All files)";
+    const label = raw || selectedFolderRoot || workspaceRootPath || "Default Project Folder (All files)";
     container.innerHTML = scopeMode === "folder"
       ? `<span class="file-chip file-chip-folder">📁 Entire Folder: ${escapeHtml(label)}</span>`
-      : `<span class="file-chip">No specific file selected yet — pick via Browse File or autocomplete</span>`;
+      : `<span class="file-chip">No specific file selected yet — choose files or subfolders in the browser above</span>`;
     return;
   }
   container.innerHTML = selectedContextFiles.map((f, idx) => `
@@ -160,7 +196,9 @@ async function loadWorkspacePaths(rootPath = null) {
     const res = await fetch(url);
     if (!res.ok) return;
     const data = await res.json();
+    if (!repoRootPath && data.root) repoRootPath = data.root;
     workspaceRootPath = data.root || workspaceRootPath;
+    if (!selectedFolderRoot) selectedFolderRoot = workspaceRootPath;
     list.innerHTML = (data.entries || []).map((e) => (
       `<option value="${escapeHtml(e.path)}">${e.type === "folder" ? "📁 Folder" : "📄 File"}</option>`
     )).join("");
@@ -170,32 +208,271 @@ async function loadWorkspacePaths(rootPath = null) {
   }
 }
 
-async function pickNativeTarget(mode) {
+function getInitialBrowseDir(mode) {
   const pathInput = document.getElementById("projectPath");
-  const initialDir = scopeMode === "folder" ? (pathInput?.value.trim() || workspaceRootPath) : workspaceRootPath;
-  try {
-    const res = await fetch(`${API_BASE}/fs/pick`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, initial_dir: initialDir || null }),
-    });
-    if (!res.ok) throw new Error("Dialog request failed");
-    const data = await res.json();
-    const paths = data.paths || [];
-    if (paths.length === 0) return;
-    if (mode === "folder") {
-      setScopeMode("folder");
-      if (pathInput) pathInput.value = paths[0];
-      await loadWorkspacePaths(paths[0]);
-      renderScopeChips();
-    } else {
-      setScopeMode("files");
-      paths.forEach((p) => addTargetFileOrSubfolder(p));
-      if (pathInput) pathInput.value = "";
-    }
-  } catch (err) {
-    alert("Could not open native picker: " + err.message);
+  const typed = (pathInput?.value || "").trim();
+  if (mode === "folder" && typed) return typed;
+  return explorerCurrentDir || selectedFolderRoot || workspaceRootPath || repoRootPath || "";
+}
+
+function handleScopeFolderClick() {
+  setScopeMode("folder");
+  openFsExplorer("folder", getInitialBrowseDir("folder"));
+}
+
+function handleScopeFilesClick() {
+  setScopeMode("files");
+  openFsExplorer("files", getInitialBrowseDir("files"));
+}
+
+function handleBrowseFolderClick() {
+  setScopeMode("folder");
+  openFsExplorer("folder", getInitialBrowseDir("folder"));
+}
+
+function handleBrowseFileClick() {
+  setScopeMode("files");
+  openFsExplorer("files", getInitialBrowseDir("files"));
+}
+
+function handleAddTargetClick() {
+  const pathInput = document.getElementById("projectPath");
+  if (pathInput && pathInput.value.trim()) {
+    addTargetFileOrSubfolder(pathInput.value);
+    pathInput.value = "";
+    if (explorerOpen) renderExplorerRows();
   }
+}
+
+function updateExplorerModeUI() {
+  const titleEl = document.getElementById("fsExplorerTitle");
+  const useDirBtn = document.getElementById("btnUseCurrentFolder");
+  const doneBtn = document.getElementById("btnFsDone");
+  const clearBtn = document.getElementById("btnFsClearSelected");
+  if (titleEl) {
+    titleEl.textContent = explorerMode === "folder"
+      ? "📁 Select Target Folder (click a folder to open, or ✓ Select Folder)"
+      : "📄 Select Specific File(s) or Subfolder(s)";
+  }
+  if (useDirBtn) useDirBtn.style.display = explorerMode === "folder" ? "inline-flex" : "none";
+  if (doneBtn) doneBtn.style.display = explorerMode === "files" ? "inline-flex" : "none";
+  if (clearBtn) clearBtn.style.display = explorerMode === "files" ? "inline-flex" : "none";
+}
+
+async function openFsExplorer(mode, dirPath = "") {
+  explorerMode = mode === "files" ? "files" : "folder";
+  explorerOpen = true;
+  const panel = document.getElementById("fsExplorerPanel");
+  const searchInput = document.getElementById("fsSearchInput");
+  if (panel) panel.style.display = "flex";
+  if (searchInput) searchInput.value = "";
+  updateExplorerModeUI();
+  await browseFsDirectory(dirPath || explorerCurrentDir || selectedFolderRoot || workspaceRootPath || "", "");
+}
+
+function closeFsExplorer() {
+  explorerOpen = false;
+  const panel = document.getElementById("fsExplorerPanel");
+  if (panel) panel.style.display = "none";
+}
+
+function browseParentDir() {
+  if (!explorerParentDir) return;
+  const searchInput = document.getElementById("fsSearchInput");
+  if (searchInput) searchInput.value = "";
+  browseFsDirectory(explorerParentDir, "");
+}
+
+function browseProjectRoot() {
+  const searchInput = document.getElementById("fsSearchInput");
+  if (searchInput) searchInput.value = "";
+  browseFsDirectory(repoRootPath || workspaceRootPath || "", "");
+}
+
+function handleFsSearchInput(val) {
+  if (explorerSearchTimer) clearTimeout(explorerSearchTimer);
+  explorerSearchTimer = setTimeout(() => {
+    browseFsDirectory(explorerCurrentDir, val || "");
+  }, 180);
+}
+
+async function selectEntireFolder(folderPath) {
+  if (!folderPath) return;
+  const pathInput = document.getElementById("projectPath");
+  setScopeMode("folder");
+  selectedFolderRoot = folderPath;
+  workspaceRootPath = folderPath;
+  if (pathInput) pathInput.value = folderPath;
+  renderScopeChips();
+  await loadWorkspacePaths(folderPath);
+}
+
+async function useCurrentExplorerFolder() {
+  if (!explorerCurrentDir) return;
+  await selectEntireFolder(explorerCurrentDir);
+  closeFsExplorer();
+}
+
+function toggleTargetSelection(targetPath) {
+  const rel = toRelativeTarget(targetPath);
+  if (!rel) return;
+  if (scopeMode !== "files") setScopeMode("files");
+  const idx = selectedContextFiles.indexOf(rel);
+  if (idx >= 0) {
+    selectedContextFiles.splice(idx, 1);
+  } else {
+    selectedContextFiles.push(rel);
+  }
+  renderScopeChips();
+  renderExplorerRows();
+}
+
+function clearSelectedTargets() {
+  selectedContextFiles = [];
+  const pathInput = document.getElementById("projectPath");
+  if (pathInput && scopeMode === "files") pathInput.value = "";
+  renderScopeChips();
+  renderExplorerRows();
+}
+
+function formatEntrySize(bytes) {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isTargetSelected(entry) {
+  const rel = toRelativeTarget(entry.rel_path || entry.path);
+  return selectedContextFiles.includes(rel) || selectedContextFiles.includes(entry.path);
+}
+
+async function browseFsDirectory(dirPath = "", query = "") {
+  const listEl = document.getElementById("fsEntriesList");
+  const pathLabel = document.getElementById("fsCurrentDirLabel");
+  const drivesBar = document.getElementById("fsDrivesBar");
+  const parentBtn = document.getElementById("btnFsParent");
+  if (!listEl) return;
+
+  listEl.innerHTML = `<div class="empty-state" style="padding:0.85rem;">Loading directory…</div>`;
+  try {
+    const params = new URLSearchParams();
+    if (dirPath) params.set("path", dirPath);
+    const activeRoot = selectedFolderRoot || workspaceRootPath || repoRootPath;
+    if (activeRoot) params.set("root", activeRoot);
+    if (query && query.trim()) params.set("query", query.trim());
+
+    const res = await fetch(`${API_BASE}/fs/browse?${params.toString()}`);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    explorerCurrentDir = data.current_dir || "";
+    explorerParentDir = data.parent_dir || null;
+    if (!repoRootPath && data.repo_root) repoRootPath = data.repo_root;
+    currentExplorerFolders = data.folders || [];
+    currentExplorerFiles = data.files || [];
+
+    if (pathLabel) {
+      pathLabel.textContent = explorerCurrentDir + (data.query ? `  (search: "${data.query}")` : "");
+    }
+    if (parentBtn) {
+      parentBtn.disabled = !explorerParentDir;
+      parentBtn.style.opacity = explorerParentDir ? "1" : "0.45";
+    }
+    if (drivesBar) {
+      const drives = data.drives || [];
+      drivesBar.innerHTML = drives.map((drv, idx) => (
+        `<button type="button" class="fs-drive-btn" onclick="onFsDriveSelect(${idx})" title="Browse drive ${escapeHtml(drv)}">${escapeHtml(drv)}</button>`
+      )).join("");
+      drivesBar.dataset.drives = JSON.stringify(drives);
+    }
+
+    renderExplorerRows();
+  } catch (err) {
+    listEl.innerHTML = `<div class="empty-state" style="padding:0.85rem; color:#f85149;">Unable to list directory: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderExplorerRows() {
+  const listEl = document.getElementById("fsEntriesList");
+  if (!listEl) return;
+  if (currentExplorerFolders.length === 0 && currentExplorerFiles.length === 0) {
+    listEl.innerHTML = `<div class="empty-state" style="padding:0.85rem;">No matching folders or files in this directory.</div>`;
+    return;
+  }
+
+  let html = "";
+  currentExplorerFolders.forEach((folder, idx) => {
+    const isSel = explorerMode === "files" && isTargetSelected(folder);
+    const displayName = (document.getElementById("fsSearchInput")?.value.trim() ? folder.rel_path : folder.name) + "/";
+    const btnLabel = explorerMode === "folder"
+      ? "✓ Select Folder"
+      : (isSel ? "✓ Selected" : "+ Select Subfolder");
+    html += `
+      <div class="fs-entry-row ${isSel ? "selected" : ""}">
+        <button type="button" class="fs-entry-main" onclick="onFsFolderOpen(${idx})" title="Open ${escapeHtml(folder.path)}">
+          📁 <span>${escapeHtml(displayName)}</span>
+        </button>
+        <button type="button" class="fs-entry-action ${isSel ? "selected" : ""}" onclick="onFsFolderSelect(${idx})">${btnLabel}</button>
+      </div>
+    `;
+  });
+
+  currentExplorerFiles.forEach((file, idx) => {
+    const isSel = explorerMode === "files" && isTargetSelected(file);
+    const displayName = document.getElementById("fsSearchInput")?.value.trim() ? file.rel_path : file.name;
+    const sizeText = formatEntrySize(file.size);
+    const btnLabel = isSel ? "✓ Selected" : "+ Select File";
+    html += `
+      <div class="fs-entry-row ${isSel ? "selected" : ""}">
+        <button type="button" class="fs-entry-main" onclick="onFsFileSelect(${idx})" title="Select ${escapeHtml(file.path)}">
+          📄 <span>${escapeHtml(displayName)}</span>
+        </button>
+        ${sizeText ? `<span class="fs-entry-meta">${sizeText}</span>` : ""}
+        <button type="button" class="fs-entry-action ${isSel ? "selected" : ""}" onclick="onFsFileSelect(${idx})">${btnLabel}</button>
+      </div>
+    `;
+  });
+
+  listEl.innerHTML = html;
+}
+
+function onFsDriveSelect(idx) {
+  const drivesBar = document.getElementById("fsDrivesBar");
+  const drives = drivesBar && drivesBar.dataset.drives ? JSON.parse(drivesBar.dataset.drives) : [];
+  if (drives[idx]) browseFsDirectory(drives[idx], "");
+}
+
+function onFsFolderOpen(idx) {
+  const folder = currentExplorerFolders[idx];
+  if (!folder) return;
+  const searchInput = document.getElementById("fsSearchInput");
+  if (searchInput) searchInput.value = "";
+  browseFsDirectory(folder.path, "");
+}
+
+async function onFsFolderSelect(idx) {
+  const folder = currentExplorerFolders[idx];
+  if (!folder) return;
+  if (explorerMode === "folder") {
+    await selectEntireFolder(folder.path);
+    closeFsExplorer();
+  } else {
+    toggleTargetSelection(folder.rel_path || folder.path);
+  }
+}
+
+function onFsFileSelect(idx) {
+  const file = currentExplorerFiles[idx];
+  if (!file) return;
+  if (explorerMode !== "files") {
+    explorerMode = "files";
+    setScopeMode("files");
+    updateExplorerModeUI();
+  }
+  toggleTargetSelection(file.rel_path || file.path);
 }
 
 async function pasteOrWrapCodeSnippet() {
@@ -252,20 +529,23 @@ function setupEventListeners() {
   }
 
   document.getElementById("btnPasteCode")?.addEventListener("click", pasteOrWrapCodeSnippet);
-  document.getElementById("btnScopeFolder")?.addEventListener("click", () => setScopeMode("folder"));
-  document.getElementById("btnScopeFiles")?.addEventListener("click", () => setScopeMode("files"));
-  document.getElementById("btnPickFolder")?.addEventListener("click", () => pickNativeTarget("folder"));
-  document.getElementById("btnPickFile")?.addEventListener("click", () => pickNativeTarget("file"));
 
   const pathInput = document.getElementById("projectPath");
-  document.getElementById("btnAddTarget")?.addEventListener("click", () => {
-    if (pathInput && pathInput.value.trim()) {
-      addTargetFileOrSubfolder(pathInput.value);
-      pathInput.value = "";
-    }
-  });
   pathInput?.addEventListener("input", () => {
     if (scopeMode === "folder") renderScopeChips();
+  });
+  pathInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && scopeMode === "files") {
+      e.preventDefault();
+      handleAddTargetClick();
+    }
+  });
+
+  document.getElementById("fsSearchInput")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      browseFsDirectory(explorerCurrentDir, e.target.value || "");
+    }
   });
 
   const btnClose = document.getElementById("btnCloseModal");
@@ -423,14 +703,14 @@ async function handleTaskSubmit(e) {
   const rawPath = document.getElementById("projectPath").value.trim();
   const useWorktree = document.getElementById("useWorktree").checked;
 
-  let projectPath = rawPath || null;
+  let projectPath = rawPath || selectedFolderRoot || null;
   const contextFiles = [...selectedContextFiles];
   if (scopeMode === "files") {
     if (rawPath) {
       const rel = toRelativeTarget(rawPath);
       if (rel && !contextFiles.includes(rel)) contextFiles.push(rel);
     }
-    projectPath = workspaceRootPath || null;
+    projectPath = selectedFolderRoot || workspaceRootPath || null;
   }
 
   const payload = {
@@ -454,6 +734,11 @@ async function handleTaskSubmit(e) {
     document.getElementById("taskForm").reset();
     document.getElementById("taskTitle").placeholder = "Auto-generated from your prompt below (or type a custom title)";
     document.getElementById("useWorktree").checked = true;
+    closeFsExplorer();
+    if (repoRootPath) {
+      selectedFolderRoot = repoRootPath;
+      workspaceRootPath = repoRootPath;
+    }
     setScopeMode("folder");
     await fetchTasks();
   } catch (err) {
