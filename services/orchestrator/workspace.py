@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class WorkspaceManager:
@@ -91,3 +91,60 @@ class WorkspaceManager:
 
         res = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
         return res.returncode == 0
+
+    def get_changed_files(self, working_dir: Path) -> List[Dict[str, Any]]:
+        """Inspect git status and diffs for a working directory or worktree."""
+        if not working_dir.exists():
+            return []
+
+        # Run git status --porcelain
+        res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(working_dir),
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            return []
+
+        files: List[Dict[str, Any]] = []
+        for raw_line in res.stdout.splitlines():
+            if not raw_line or len(raw_line) < 4:
+                continue
+            status_code = raw_line[:2]
+            file_path = raw_line[3:].strip()
+            if file_path.startswith('"') and file_path.endswith('"'):
+                file_path = file_path[1:-1]
+
+            if "M" in status_code:
+                status_name = "MODIFIED"
+            elif "A" in status_code or "?" in status_code:
+                status_name = "ADDED"
+            elif "D" in status_code:
+                status_name = "DELETED"
+            else:
+                status_name = "CHANGED"
+
+            # Get file-specific diff
+            diff_res = subprocess.run(
+                ["git", "diff", "HEAD", "--", file_path],
+                cwd=str(working_dir),
+                capture_output=True,
+                text=True,
+            )
+            file_diff = diff_res.stdout[:5000] if diff_res.returncode == 0 else ""
+
+            # If untracked new file, show snippet of content
+            if not file_diff and (working_dir / file_path).is_file():
+                try:
+                    with open(working_dir / file_path, "r", encoding="utf-8", errors="replace") as f:
+                        file_diff = "+++ New File Preview:\n" + f.read(2000)
+                except Exception:
+                    pass
+
+            files.append({
+                "path": file_path,
+                "status": status_name,
+                "diff": file_diff or "No diff available",
+            })
+        return files
