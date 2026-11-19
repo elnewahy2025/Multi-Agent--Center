@@ -14,6 +14,8 @@ from packages.contracts.agent import (
 )
 from packages.contracts.enums import AgentType, PolicyMode
 from services.agent_bridge.base import BaseAgentAdapter
+from services.agent_bridge.opencode.stream_parser import parse_opencode_line
+from services.agent_bridge.streaming import ActivityEvent
 
 
 class OpenCodeAdapter(BaseAgentAdapter):
@@ -95,3 +97,7 @@ class OpenCodeAdapter(BaseAgentAdapter):
 
         cmd.append(request.prompt)
         return cmd
+
+    def parse_stream_line(self, line: str) -> List[ActivityEvent]:
+        """Translate OpenCode NDJSON events into normalized activity events."""
+        return parse_opencode_line(line)
