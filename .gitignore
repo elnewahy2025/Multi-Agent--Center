@@ -36,3 +36,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Archives and bundles
+*.zip
+*.tar.gz
