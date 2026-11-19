@@ -18,6 +18,7 @@
     <div class="system-status">
       <span class="status-pill status-healthy" id="dbStatus">DB: Connecting...</span>
       <span class="status-pill status-agent" id="agentsCount">Agents: 0</span>
+      <span class="status-pill status-healthy" id="errorPill">Errors: 0</span>
       <button class="btn btn-secondary btn-sm" id="btnRefresh">Refresh</button>
     </div>
   </header>
@@ -94,6 +95,18 @@
         </div>
       </section>
     </div>
+
+    <!-- Error Messages & Diagnostics Center -->
+    <section class="section" id="errorCenterSection">
+      <div class="section-header">
+        <h2>🚨 Error Messages & Diagnostics Center</h2>
+        <span class="badge" id="errorCountBadge">0 Active Errors</span>
+        <button class="btn btn-secondary btn-sm" id="btnClearErrors" onclick="clearAllErrors()" style="margin-left: auto;">Clear Resolved</button>
+      </div>
+      <div class="card error-center-card" id="errorCenterList">
+        <div class="empty-state">✓ All systems operational. No active errors or agent failures.</div>
+      </div>
+    </section>
 
     <!-- Tasks Lifecycle Table -->
     <section class="section">

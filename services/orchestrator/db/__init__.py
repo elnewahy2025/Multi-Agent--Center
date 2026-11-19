@@ -6,6 +6,7 @@ from services.orchestrator.db.models import (
     ApprovalModel,
     AuditLogModel,
     Base,
+    ErrorLogModel,
     ProjectModel,
     TaskModel,
     WorkflowMessageModel,
@@ -30,6 +31,7 @@ __all__ = [
     "AgentRunModel",
     "ApprovalModel",
     "AuditLogModel",
+    "ErrorLogModel",
     "WorkflowRunModel",
     "WorkflowMessageModel",
 ]

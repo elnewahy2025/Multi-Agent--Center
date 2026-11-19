@@ -26,7 +26,9 @@ from packages.contracts import (
 )
 from services.agent_bridge import AgentRegistry
 from services.orchestrator.db import (
+    AgentRunModel,
     AuditLogModel,
+    ErrorLogModel,
     TaskModel,
     WorkflowMessageModel,
     WorkflowRunModel,
@@ -50,26 +52,112 @@ class CollaborativeWorkflowEngine:
 
     def _extract_text_content(self, raw_output: str) -> str:
         """Extract clean text content from JSON or plain text agent stdout."""
-        if not raw_output:
+        if not raw_output or not raw_output.strip():
             return ""
+        trimmed = raw_output.strip()
+
+        # 1. Try full JSON parse (Antigravity CLI output, etc.)
+        try:
+            data = json.loads(trimmed)
+            if isinstance(data, dict):
+                for key in ("response", "content", "text", "message"):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+                part = data.get("part", {})
+                if isinstance(part, dict) and part.get("text"):
+                    return part["text"].strip()
+        except Exception:
+            pass
+
+        # 2. Try line-by-line NDJSON
         text_parts = []
-        for line in raw_output.strip().split("\n"):
+        for line in trimmed.split("\n"):
             line = line.strip()
             if not line:
                 continue
             if line.startswith("{") and line.endswith("}"):
                 try:
                     data = json.loads(line)
-                    part = data.get("part", {})
-                    if part.get("type") == "text" and part.get("text"):
-                        text_parts.append(part["text"])
-                    elif "content" in data and isinstance(data["content"], str):
-                        text_parts.append(data["content"])
+                    found = False
+                    for key in ("response", "content", "text", "message"):
+                        val = data.get(key)
+                        if isinstance(val, str) and val.strip():
+                            text_parts.append(val.strip())
+                            found = True
+                            break
+                    if not found:
+                        part = data.get("part", {})
+                        if isinstance(part, dict) and part.get("text"):
+                            text_parts.append(part["text"].strip())
                 except Exception:
                     text_parts.append(line)
             else:
                 text_parts.append(line)
-        return "\n".join(text_parts).strip() if text_parts else raw_output.strip()
+        return "\n".join(text_parts).strip() if text_parts else trimmed
+
+    def _persist_run_record(
+        self,
+        task_id: str,
+        res: AgentExecutionResult,
+    ) -> None:
+        """Persist structured run record for audit and error tracking."""
+        with get_db_session() as session:
+            run_model = AgentRunModel(
+                id=res.run_id,
+                task_id=task_id,
+                agent_type=res.agent_type.value,
+                status=res.status.value,
+                exit_code=res.exit_code,
+                stdout=res.stdout,
+                stderr=res.stderr,
+                duration_seconds=res.duration_seconds,
+                error_reason=res.error_reason,
+                started_at=datetime.utcnow(),
+                completed_at=datetime.utcnow(),
+            )
+            session.add(run_model)
+
+    def _record_error(
+        self,
+        task_id: str,
+        workflow_id: str,
+        source: str,
+        title: str,
+        message: str,
+        stderr: Optional[str] = None,
+        severity: str = "ERROR",
+    ) -> None:
+        """Record structured error for the Error Messages Center."""
+        with get_db_session() as session:
+            err = ErrorLogModel(
+                task_id=task_id,
+                run_id=workflow_id,
+                source=source,
+                severity=severity,
+                title=title,
+                message=message,
+                stderr=stderr,
+                resolved=False,
+            )
+            session.add(err)
+
+            audit = AuditLogModel(
+                task_id=task_id,
+                run_id=workflow_id,
+                event_type="SYSTEM_ERROR",
+                message=f"[{source}] {title}: {message}",
+            )
+            session.add(audit)
+
+    def _fail_workflow(self, workflow_id: str, task_id: str, reason: str) -> None:
+        """Mark workflow and parent task as FAILED with detailed diagnostic reason."""
+        self._update_phase(workflow_id, WorkflowPhase.FAILED, status="FAILED", report=reason)
+        with get_db_session() as session:
+            t = session.query(TaskModel).filter_by(id=task_id).first()
+            if t:
+                t.status = TaskStatus.FAILED.value
+                t.updated_at = datetime.utcnow()
 
     def _record_message(
         self,
@@ -175,7 +263,35 @@ class CollaborativeWorkflowEngine:
             timeout_seconds=300,
         )
         res1 = antigravity_adapter.execute(req1)
-        proposal_text = self._extract_text_content(res1.stdout) or "Proceed with standard modular implementation."
+        self._persist_run_record(task_id, res1)
+
+        if res1.status != TaskStatus.COMPLETED or res1.exit_code != 0:
+            err_msg = res1.error_reason or res1.stderr or f"Antigravity exited with code {res1.exit_code}"
+            self._record_error(
+                task_id=task_id,
+                workflow_id=workflow_id,
+                source="ANTIGRAVITY_CLI",
+                title="Stage 1 Inspection Failed",
+                message=err_msg,
+                stderr=res1.stderr,
+                severity="CRITICAL",
+            )
+            self._record_message(
+                workflow_id=workflow_id,
+                sender=AgentType.ANTIGRAVITY,
+                recipient=AgentType.OPENCODE,
+                phase=WorkflowPhase.INSPECTION,
+                content=f"❌ [Stage 1 Failed — Antigravity Error]\nExit Code: {res1.exit_code}\nError: {err_msg}\nStderr:\n{res1.stderr or '(no stderr)'}",
+            )
+            self._fail_workflow(workflow_id, task_id, f"Inspection failed: {err_msg}")
+            return self.get_workflow_run(workflow_id)
+
+        proposal_text = self._extract_text_content(res1.stdout)
+        if not proposal_text:
+            err_msg = "Antigravity completed but output was empty."
+            self._record_error(task_id, workflow_id, "ANTIGRAVITY_CLI", "Empty Inspection Output", err_msg, res1.stderr)
+            self._fail_workflow(workflow_id, task_id, err_msg)
+            return self.get_workflow_run(workflow_id)
 
         self._record_message(
             workflow_id=workflow_id,
@@ -205,7 +321,35 @@ class CollaborativeWorkflowEngine:
             timeout_seconds=300,
         )
         res2 = opencode_adapter.execute(req2)
-        negotiation_text = self._extract_text_content(res2.stdout) or "AGREED. Steps confirmed."
+        self._persist_run_record(task_id, res2)
+
+        if res2.status != TaskStatus.COMPLETED or res2.exit_code != 0:
+            err_msg = res2.error_reason or res2.stderr or f"OpenCode exited with code {res2.exit_code}"
+            self._record_error(
+                task_id=task_id,
+                workflow_id=workflow_id,
+                source="OPENCODE_CLI",
+                title="Stage 2 Peer Review Failed",
+                message=err_msg,
+                stderr=res2.stderr,
+                severity="CRITICAL",
+            )
+            self._record_message(
+                workflow_id=workflow_id,
+                sender=AgentType.OPENCODE,
+                recipient=AgentType.ANTIGRAVITY,
+                phase=WorkflowPhase.NEGOTIATION,
+                content=f"❌ [Stage 2 Failed — OpenCode Error]\nExit Code: {res2.exit_code}\nError: {err_msg}\nStderr:\n{res2.stderr or '(no stderr)'}",
+            )
+            self._fail_workflow(workflow_id, task_id, f"Peer review failed: {err_msg}")
+            return self.get_workflow_run(workflow_id)
+
+        negotiation_text = self._extract_text_content(res2.stdout)
+        if not negotiation_text:
+            err_msg = "OpenCode completed peer review but output was empty."
+            self._record_error(task_id, workflow_id, "OPENCODE_CLI", "Empty Peer Review Output", err_msg, res2.stderr)
+            self._fail_workflow(workflow_id, task_id, err_msg)
+            return self.get_workflow_run(workflow_id)
 
         self._record_message(
             workflow_id=workflow_id,
@@ -255,6 +399,29 @@ class CollaborativeWorkflowEngine:
             timeout_seconds=600,
         )
         res3 = opencode_adapter.execute(req3)
+        self._persist_run_record(task_id, res3)
+
+        if res3.status != TaskStatus.COMPLETED or res3.exit_code != 0:
+            err_msg = res3.error_reason or res3.stderr or f"OpenCode execution failed with code {res3.exit_code}"
+            self._record_error(
+                task_id=task_id,
+                workflow_id=workflow_id,
+                source="OPENCODE_CLI",
+                title="Stage 3 Execution Failed",
+                message=err_msg,
+                stderr=res3.stderr,
+                severity="CRITICAL",
+            )
+            self._record_message(
+                workflow_id=workflow_id,
+                sender=AgentType.OPENCODE,
+                recipient=AgentType.ANTIGRAVITY,
+                phase=WorkflowPhase.EXECUTION,
+                content=f"❌ [Stage 3 Failed — OpenCode Execution Error]\nExit Code: {res3.exit_code}\nError: {err_msg}\nStderr:\n{res3.stderr or '(no stderr)'}",
+            )
+            self._fail_workflow(workflow_id, task_id, f"Execution failed: {err_msg}")
+            return self.get_workflow_run(workflow_id)
+
         execution_text = self._extract_text_content(res3.stdout) or "Execution completed."
 
         self._record_message(
@@ -301,6 +468,29 @@ class CollaborativeWorkflowEngine:
             timeout_seconds=300,
         )
         res4 = antigravity_adapter.execute(req4)
+        self._persist_run_record(task_id, res4)
+
+        if res4.status != TaskStatus.COMPLETED or res4.exit_code != 0:
+            err_msg = res4.error_reason or res4.stderr or f"Antigravity verification failed with code {res4.exit_code}"
+            self._record_error(
+                task_id=task_id,
+                workflow_id=workflow_id,
+                source="ANTIGRAVITY_CLI",
+                title="Stage 4 Verification Failed",
+                message=err_msg,
+                stderr=res4.stderr,
+                severity="WARNING",
+            )
+            self._record_message(
+                workflow_id=workflow_id,
+                sender=AgentType.ANTIGRAVITY,
+                recipient=AgentType.OPENCODE,
+                phase=WorkflowPhase.VERIFICATION,
+                content=f"⚠️ [Stage 4 Incomplete — Antigravity Verification Error]\nExit Code: {res4.exit_code}\nError: {err_msg}\nStderr:\n{res4.stderr or '(no stderr)'}",
+            )
+            self._fail_workflow(workflow_id, task_id, f"Verification failed: {err_msg}")
+            return self.get_workflow_run(workflow_id)
+
         verification_text = self._extract_text_content(res4.stdout) or "VERIFIED: Implementation verified 100% correct."
 
         self._record_message(

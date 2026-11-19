@@ -150,3 +150,20 @@ class WorkflowMessageModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     workflow_run = relationship("WorkflowRunModel", back_populates="messages")
+
+
+class ErrorLogModel(Base):
+    """Diagnostics and error message log for user visibility."""
+    __tablename__ = "error_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(String(64), nullable=True)
+    run_id = Column(String(64), nullable=True)
+    source = Column(String(64), nullable=False, default="SYSTEM")
+    severity = Column(String(32), nullable=False, default="ERROR")  # CRITICAL, ERROR, WARNING
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    stderr = Column(Text, nullable=True)
+    resolved = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
