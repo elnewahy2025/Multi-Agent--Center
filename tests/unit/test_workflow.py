@@ -143,7 +143,8 @@ class TestCollaborativeWorkflow(unittest.TestCase):
         th.start()
         return th, observed
 
-    def _build_stub_engine(self, anti_handler, opc_handler, wt_path: Path, max_attempts: int = 2):
+    def _build_stub_engine(self, anti_handler, opc_handler, wt_path: Path, max_attempts: int = 2,
+                           extra_handlers=None):
         class StubAdapter:
             def __init__(self, agent_type, handler):
                 self.agent_type, self.handler, self.requests = agent_type, handler, []
@@ -173,8 +174,11 @@ class TestCollaborativeWorkflow(unittest.TestCase):
 
         anti = StubAdapter(AgentType.ANTIGRAVITY, anti_handler)
         opc = StubAdapter(AgentType.OPENCODE, opc_handler)
+        adapters = {AgentType.ANTIGRAVITY: anti, AgentType.OPENCODE: opc}
+        for agent_type, handler in (extra_handlers or {}).items():
+            adapters[agent_type] = StubAdapter(agent_type, handler)
         engine = CollaborativeWorkflowEngine(
-            registry=StubRegistry({AgentType.ANTIGRAVITY: anti, AgentType.OPENCODE: opc}),
+            registry=StubRegistry(adapters),
             workspace_mgr=StubWorkspaceMgr(),
             max_attempts=max_attempts,
             poll_interval_seconds=0.03,
@@ -292,6 +296,58 @@ class TestCollaborativeWorkflow(unittest.TestCase):
                 self.assertIn("Add '---' separator above section 6 in README.md", opc_ok.requests[3].prompt)
             finally:
                 self._cleanup_task(task_ok)
+
+    def test_selected_agent_becomes_negotiator_and_implementer(self):
+        cases = [
+            (AgentType.CLAUDE_CODE, "Claude Code", AgentType.ANTIGRAVITY),
+            (AgentType.QWEN_CODE, "Qwen Code", AgentType.ANTIGRAVITY),
+            (AgentType.ANTIGRAVITY, "Google Antigravity", AgentType.OPENCODE),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            for selected_type, expected_name, expected_inspector in cases:
+                engine, anti, opc = self._build_stub_engine(
+                    lambda _r, n: ("Plan ready." if n == 1 else "VERDICT: APPROVED")
+                    if selected_type != AgentType.ANTIGRAVITY
+                    else ("AGREED" if n == 1 else "Implemented as Antigravity"),
+                    lambda _r, n: ("Plan ready." if n == 1 else "VERDICT: APPROVED")
+                    if selected_type == AgentType.ANTIGRAVITY
+                    else "unused",
+                    Path(tmp),
+                    extra_handlers={
+                        AgentType.CLAUDE_CODE: lambda _r, n: "AGREED" if n == 1 else "Claude executed",
+                        AgentType.QWEN_CODE: lambda _r, n: "AGREED" if n == 1 else "Qwen executed",
+                    },
+                )
+                task_id = f"tsk_{uuid.uuid4().hex[:8]}"
+                with get_db_session() as s:
+                    s.add(TaskModel(
+                        id=task_id, title=f"Task for {selected_type.value}",
+                        description="Implement feature", assigned_agent=selected_type.value, status="PENDING",
+                    ))
+                try:
+                    wf = engine.run_collaborative_workflow(task_id)
+                    self.assertEqual(wf.status, "COMPLETED")
+                    self.assertEqual(wf.inspector_agent, expected_inspector)
+                    self.assertEqual(wf.worker_agent, selected_type)
+                    self.assertEqual(wf.messages[0].sender, expected_inspector)
+                    self.assertEqual(wf.messages[0].phase, WorkflowPhase.INSPECTION)
+                    self.assertEqual(wf.messages[1].sender, selected_type)
+                    self.assertEqual(wf.messages[1].phase, WorkflowPhase.NEGOTIATION)
+                    self.assertEqual(wf.messages[2].sender, selected_type)
+                    self.assertEqual(wf.messages[2].phase, WorkflowPhase.EXECUTION)
+                    self.assertEqual(wf.messages[3].sender, expected_inspector)
+                    self.assertEqual(wf.messages[3].phase, WorkflowPhase.VERIFICATION)
+
+                    inspector_stub = engine.registry.get_adapter(expected_inspector)
+                    worker_stub = engine.registry.get_adapter(selected_type)
+                    self.assertEqual(len(inspector_stub.requests), 2)
+                    self.assertEqual(len(worker_stub.requests), 2)
+                    self.assertIn(expected_name, inspector_stub.requests[0].prompt)
+                    if selected_type in (AgentType.CLAUDE_CODE, AgentType.QWEN_CODE):
+                        self.assertNotIn("OpenCode", inspector_stub.requests[0].prompt)
+                        self.assertNotIn("OpenCode", worker_stub.requests[1].prompt)
+                finally:
+                    self._cleanup_task(task_id)
 
 
 if __name__ == "__main__":
