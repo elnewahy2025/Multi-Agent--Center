@@ -15,6 +15,7 @@ from packages.contracts import (
     TaskStatus,
 )
 from services.orchestrator.db import (
+    AgentEventModel,
     ApprovalModel,
     AuditLogModel,
     ErrorLogModel,
@@ -24,6 +25,7 @@ from services.orchestrator.db import (
     init_db,
 )
 from services.orchestrator.engine import TaskOrchestrator
+from services.orchestrator.events import list_events
 from services.orchestrator.workflows import CollaborativeWorkflowEngine
 
 app = FastAPI(
@@ -157,6 +159,21 @@ def get_task_runs(task_id: str) -> List[Dict[str, Any]]:
         ]
 
 
+@app.get("/tasks/{task_id}/events")
+def get_task_events(task_id: str, after_id: int = 0) -> Dict[str, Any]:
+    """Return live streamed activity events (tool calls, text deltas, status) for a task."""
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    events = list_events(task_id, after_id=after_id)
+    return {
+        "task_id": task_id,
+        "task_status": task.status.value,
+        "count": len(events),
+        "events": events,
+    }
+
+
 @app.get("/tasks/{task_id}/files")
 def get_task_files(task_id: str) -> Dict[str, Any]:
     """Inspect and return all files touched, changed, or actively worked on by agents for this task."""
@@ -180,12 +197,36 @@ def get_task_files(task_id: str) -> Dict[str, Any]:
     changed_files = orchestrator.workspace_mgr.get_changed_files(working_dir)
     context_files = task.metadata.get("context_files", []) if task.metadata else []
 
+    with get_db_session() as session:
+        tool_events = (
+            session.query(AgentEventModel)
+            .filter_by(task_id=task_id, kind="tool")
+            .order_by(AgentEventModel.id.asc())
+            .all()
+        )
+        activity_files = [
+            {
+                "id": ev.id,
+                "agent": ev.agent,
+                "phase": ev.phase,
+                "tool": ev.tool or "tool",
+                "target": ev.title or "(workspace)",
+                "status": (ev.status or "done").upper(),
+                "output": (ev.content or "")[:1500],
+                "duration_seconds": ev.duration_seconds,
+                "updated_at": ev.updated_at.isoformat(),
+            }
+            for ev in tool_events
+        ]
+
     return {
         "task_id": task_id,
         "working_dir": str(working_dir),
         "is_worktree": bool(task.worktree_path and Path(task.worktree_path).exists()),
         "total_changed": len(changed_files),
         "changed_files": changed_files,
+        "total_activity": len(activity_files),
+        "activity_files": activity_files,
         "context_files": context_files,
     }
 

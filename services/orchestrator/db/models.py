@@ -152,6 +152,26 @@ class WorkflowMessageModel(Base):
     workflow_run = relationship("WorkflowRunModel", back_populates="messages")
 
 
+class AgentEventModel(Base):
+    """Live, normalized activity event streamed from a running agent (tool call, text, status)."""
+    __tablename__ = "agent_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(String(64), nullable=False, index=True)
+    run_id = Column(String(64), nullable=False)
+    agent = Column(String(32), nullable=False)
+    phase = Column(String(32), nullable=True)
+    kind = Column(String(32), nullable=False)  # tool, text, system, error, log
+    event_key = Column(String(128), nullable=True)
+    tool = Column(String(128), nullable=True)
+    status = Column(String(32), nullable=True)  # running, done, failed
+    title = Column(Text, nullable=True)
+    content = Column(Text, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class ErrorLogModel(Base):
     """Diagnostics and error message log for user visibility."""
     __tablename__ = "error_logs"

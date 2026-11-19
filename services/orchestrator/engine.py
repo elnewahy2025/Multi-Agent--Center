@@ -20,10 +20,12 @@ from services.agent_bridge import AgentRegistry
 from services.orchestrator.db import (
     AgentRunModel,
     AuditLogModel,
+    ErrorLogModel,
     ProjectModel,
     TaskModel,
     get_db_session,
 )
+from services.orchestrator.events import EventSink
 from services.orchestrator.workspace import WorkspaceManager
 
 logger = logging.getLogger("orchestrator.engine")
@@ -180,8 +182,10 @@ class TaskOrchestrator:
             context_files=task.metadata.get("context_files", []),
         )
 
-        # Dispatch execution
-        result = adapter.execute(req)
+        # Dispatch execution with live event streaming
+        sink = EventSink(task_id=task_id, run_id=run_id, agent=agent_type.value, phase="EXECUTION")
+        result = adapter.execute(req, on_event=sink)
+        sink.flush()
 
         # Update run and task records
         with get_db_session() as session:
@@ -197,10 +201,26 @@ class TaskOrchestrator:
 
             task_record = session.query(TaskModel).filter_by(id=task_id).first()
             if task_record:
-                task_record.status = result.status.value
+                if task_record.status != TaskStatus.CANCELLED.value:
+                    task_record.status = result.status.value
                 task_record.updated_at = datetime.utcnow()
-                if result.status == TaskStatus.COMPLETED:
+                if result.status == TaskStatus.COMPLETED and task_record.status != TaskStatus.CANCELLED.value:
                     task_record.completed_at = datetime.utcnow()
+
+            if result.status != TaskStatus.COMPLETED or result.exit_code != 0:
+                if not (task_record and task_record.status == TaskStatus.CANCELLED.value):
+                    session.add(
+                        ErrorLogModel(
+                            task_id=task_id,
+                            run_id=run_id,
+                            source=f"{agent_type.value}_CLI",
+                            severity="ERROR",
+                            title=f"Task execution failed ({agent_type.value})",
+                            message=result.error_reason or f"Exited with code {result.exit_code}",
+                            stderr=result.stderr,
+                            resolved=False,
+                        )
+                    )
 
             # Audit record
             audit = AuditLogModel(
@@ -229,8 +249,9 @@ class TaskOrchestrator:
                 r.status = "CANCELLED"
                 r.error_reason = "Cancelled by operator"
                 r.completed_at = datetime.utcnow()
-                if task.assigned_agent:
-                    adapter = self.registry.get_adapter(AgentType(task.assigned_agent))
+                agent_key = r.agent_type or task.assigned_agent
+                if agent_key:
+                    adapter = self.registry.get_adapter(AgentType(agent_key))
                     if adapter:
                         adapter.cancel(r.id)
 

@@ -2,6 +2,7 @@
 
 from services.orchestrator.db.config import get_database_url
 from services.orchestrator.db.models import (
+    AgentEventModel,
     AgentRunModel,
     ApprovalModel,
     AuditLogModel,
@@ -28,6 +29,7 @@ __all__ = [
     "Base",
     "ProjectModel",
     "TaskModel",
+    "AgentEventModel",
     "AgentRunModel",
     "ApprovalModel",
     "AuditLogModel",

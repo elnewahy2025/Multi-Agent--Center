@@ -4,7 +4,11 @@
 
 const API_BASE = "http://127.0.0.1:8000";
 let activeModalTaskId = null;
+let lastRenderedTaskId = null;
 let currentModalTab = "chat";
+let modalPollTimer = null;
+const eventFingerprints = new Map();
+let lastFilesFingerprint = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   initDashboard();
@@ -46,12 +50,6 @@ async function refreshData() {
     fetchErrors(),
     fetchAudit(),
   ]);
-  if (activeModalTaskId) {
-    loadTaskDetails(activeModalTaskId);
-    if (currentModalTab === "files") {
-      loadTaskFiles(activeModalTaskId);
-    }
-  }
 }
 
 async function fetchHealth() {
@@ -244,12 +242,29 @@ function switchModalTab(tabName) {
 }
 
 function viewTaskDetails(taskId, tab = "chat") {
+  const isNewTask = lastRenderedTaskId !== taskId;
   activeModalTaskId = taskId;
+  if (isNewTask) {
+    lastRenderedTaskId = taskId;
+    eventFingerprints.clear();
+    lastFilesFingerprint = null;
+    const feed = document.getElementById("liveActivityFeed");
+    if (feed) feed.innerHTML = "";
+    const content = document.getElementById("modalContent");
+    if (content) content.innerHTML = "";
+  }
   const modal = document.getElementById("outputModal");
   if (modal) modal.style.display = "flex";
   switchModalTab(tab);
-  loadTaskDetails(taskId);
-  loadTaskFiles(taskId);
+  refreshActiveModal();
+  if (modalPollTimer) clearInterval(modalPollTimer);
+  modalPollTimer = setInterval(refreshActiveModal, 1000);
+}
+
+function refreshActiveModal() {
+  if (!activeModalTaskId) return;
+  loadTaskDetails(activeModalTaskId);
+  loadTaskFiles(activeModalTaskId);
 }
 
 function viewTaskOutput(taskId) {
@@ -260,13 +275,166 @@ function viewTaskFiles(taskId) {
   viewTaskDetails(taskId, "files");
 }
 
+function agentBadgeHtml(agentName) {
+  if (agentName === "ANTIGRAVITY") return `<span class="agent-pill agent-pill-ANTIGRAVITY">🟣 Antigravity</span>`;
+  if (agentName === "OPENCODE") return `<span class="agent-pill agent-pill-OPENCODE">🟢 OpenCode</span>`;
+  return `<span class="agent-pill agent-pill-OTHER">🤖 ${escapeHtml(agentName || "Agent")}</span>`;
+}
+
+function renderStageStepper(workflow) {
+  const stepper = document.getElementById("stageStepper");
+  if (!stepper) return;
+  if (!workflow) {
+    stepper.style.display = "none";
+    stepper.innerHTML = "";
+    return;
+  }
+  stepper.style.display = "grid";
+  const stages = [
+    { key: "INSPECTION", label: "1. Inspection (Antigravity)" },
+    { key: "NEGOTIATION", label: "2. Negotiation (OpenCode)" },
+    { key: "EXECUTION", label: "3. Execution (Worktree)" },
+    { key: "VERIFICATION", label: "4. Verification (Sign-off)" },
+  ];
+  const order = ["INSPECTION", "NEGOTIATION", "EXECUTION", "VERIFICATION", "COMPLETED"];
+  const curIdx = order.indexOf(workflow.current_phase);
+  const completedSet = new Set((workflow.messages || []).map((m) => m.phase));
+
+  stepper.innerHTML = stages.map((st, idx) => {
+    let cls = "";
+    let icon = "○";
+    if (workflow.status === "COMPLETED" || (completedSet.has(st.key) && idx < curIdx)) {
+      cls = "done";
+      icon = "✓";
+    } else if (st.key === workflow.current_phase || idx === curIdx) {
+      if (workflow.status === "FAILED") {
+        cls = "failed";
+        icon = "✕";
+      } else {
+        cls = "active";
+        icon = `<span class="spinner-dot"></span>`;
+      }
+    }
+    return `<div class="stage-step ${cls}">${icon}<span>${st.label}</span></div>`;
+  }).join("");
+}
+
+function renderActivityFeed(events) {
+  const feed = document.getElementById("liveActivityFeed");
+  if (!feed) return;
+
+  const modalBody = feed.closest(".modal-body");
+  const nearBottom = modalBody
+    ? (modalBody.scrollHeight - modalBody.scrollTop - modalBody.clientHeight < 70)
+    : false;
+
+  if (!events || events.length === 0) {
+    if (feed.children.length === 0) {
+      feed.innerHTML = `<div class="empty-state" style="padding:0.9rem;">⏳ Waiting for live agent events...</div>`;
+    }
+    return;
+  }
+
+  const placeholder = feed.querySelector(".empty-state");
+  if (placeholder) placeholder.remove();
+
+  events.forEach((ev) => {
+    const fp = `${ev.updated_at}|${ev.status}|${(ev.content || "").length}`;
+    if (eventFingerprints.get(ev.id) === fp) return;
+
+    let node = feed.querySelector(`[data-event-id="${ev.id}"]`);
+    if (!node) {
+      node = createEventElement(ev);
+      feed.appendChild(node);
+    } else {
+      updateEventElement(node, ev);
+    }
+    eventFingerprints.set(ev.id, fp);
+  });
+
+  if (nearBottom && modalBody) {
+    modalBody.scrollTop = modalBody.scrollHeight;
+  }
+}
+
+function toolStatusIcon(status) {
+  if (status === "running") return `<span class="spinner-dot"></span>`;
+  if (status === "failed") return `<span style="color:#f85149; font-weight:700;">✕</span>`;
+  return `<span style="color:#3fb950; font-weight:700;">✓</span>`;
+}
+
+function createEventElement(ev) {
+  if (ev.kind === "tool") {
+    const details = document.createElement("details");
+    details.className = "activity-tool-card";
+    details.dataset.eventId = String(ev.id);
+    details.innerHTML = `<summary class="activity-tool-header"></summary><div class="activity-tool-body"><pre></pre></div>`;
+    updateEventElement(details, ev);
+    return details;
+  }
+  const div = document.createElement("div");
+  div.dataset.eventId = String(ev.id);
+  updateEventElement(div, ev);
+  return div;
+}
+
+function updateEventElement(node, ev) {
+  if (ev.kind === "tool") {
+    node.dataset.status = ev.status || "done";
+    const summary = node.querySelector("summary");
+    const dur = ev.duration_seconds != null ? `${ev.duration_seconds.toFixed(1)}s` : (ev.status === "running" ? "running…" : "");
+    summary.innerHTML = `
+      ${toolStatusIcon(ev.status)}
+      ${agentBadgeHtml(ev.agent)}
+      ${ev.phase ? `<span class="phase-badge">${escapeHtml(ev.phase)}</span>` : ""}
+      <span class="tool-name-pill">${escapeHtml(ev.tool || "tool")}</span>
+      <span class="activity-tool-target" title="${escapeHtml(ev.title || "")}">${escapeHtml(ev.title || "(working)")}</span>
+      <span class="activity-tool-duration">${dur}</span>
+    `;
+    const pre = node.querySelector(".activity-tool-body pre");
+    pre.textContent = ev.content || (ev.status === "running" ? "Running…" : "(no output)");
+    return;
+  }
+
+  if (ev.kind === "text") {
+    node.className = `activity-text-bubble agent-${escapeHtml(ev.agent || "OTHER")}`;
+    const cursor = ev.status === "running" ? ` <span class="stream-cursor">▋</span>` : "";
+    node.innerHTML = `
+      <div class="activity-text-meta">
+        <span>${agentBadgeHtml(ev.agent)} <span style="color:var(--text-muted); margin-left:0.35rem;">Live Response</span></span>
+        ${ev.phase ? `<span class="phase-badge">${escapeHtml(ev.phase)}</span>` : ""}
+      </div>
+      <div class="activity-text-body">${escapeHtml(ev.content || "")}${cursor}</div>
+    `;
+    return;
+  }
+
+  if (ev.kind === "error" || ev.status === "failed") {
+    node.className = "activity-error-line";
+    node.innerHTML = `${agentBadgeHtml(ev.agent)} <strong>Error:</strong> ${escapeHtml(ev.title || "")} ${escapeHtml(ev.content || "")}`;
+    return;
+  }
+
+  node.className = "activity-system-line";
+  const icon = ev.status === "running" ? `<span class="spinner-dot"></span>` : "•";
+  node.innerHTML = `${icon} ${agentBadgeHtml(ev.agent)} <span>${escapeHtml(ev.title || ev.content || "")}</span>`;
+}
+
 async function loadTaskDetails(taskId) {
   const meta = document.getElementById("modalMeta");
   const content = document.getElementById("modalContent");
 
   try {
-    const wfRes = await fetch(`${API_BASE}/tasks/${taskId}/workflow`);
+    const [wfRes, evRes] = await Promise.all([
+      fetch(`${API_BASE}/tasks/${taskId}/workflow`),
+      fetch(`${API_BASE}/tasks/${taskId}/events`),
+    ]);
     const workflow = wfRes.ok ? await wfRes.json() : null;
+    const evPayload = evRes.ok ? await evRes.json() : { events: [] };
+    const events = evPayload.events || [];
+
+    renderStageStepper(workflow);
+    renderActivityFeed(events);
 
     if (workflow) {
       document.getElementById("modalTitle").textContent = "Bilateral Teamwork: Antigravity ↔ OpenCode";
@@ -279,7 +447,7 @@ async function loadTaskDetails(taskId) {
       let alertHtml = "";
       if (workflow.status === "FAILED") {
         alertHtml = `
-          <div style="background:rgba(218,54,51,0.18); border:1px solid #da3633; border-radius:6px; padding:0.75rem 1rem; color:#f85149; margin-bottom:0.75rem;">
+          <div style="background:rgba(218,54,51,0.18); border:1px solid #da3633; border-radius:6px; padding:0.75rem 1rem; color:#f85149; margin-bottom:0.5rem;">
             <strong>🚨 Workflow Execution Halted with Error:</strong>
             <div style="margin-top:0.25rem; font-size:0.8rem; color:#f0f6fc;">${escapeHtml(workflow.verification_report || 'An error occurred during agent execution.')}</div>
           </div>
@@ -287,7 +455,7 @@ async function loadTaskDetails(taskId) {
       }
 
       if (workflow.messages && workflow.messages.length > 0) {
-        let html = alertHtml + `<div style="display:flex; flex-direction:column; gap:0.6rem;">`;
+        let html = alertHtml + `<div class="files-section-heading">Completed Stage Summaries</div>`;
         workflow.messages.forEach((msg) => {
           const isAntigravity = msg.sender === "ANTIGRAVITY";
           const bubbleClass = isAntigravity ? "msg-antigravity" : "msg-opencode";
@@ -303,15 +471,9 @@ async function loadTaskDetails(taskId) {
             </div>
           `;
         });
-        html += `</div>`;
         content.innerHTML = html;
       } else {
-        content.innerHTML = alertHtml + `
-          <div style="padding:1rem; text-align:center; color:#58a6ff;">
-            <p><strong>[Stage 1: INSPECTION]</strong> Google Antigravity is currently inspecting your codebase and drafting the technical proposal...</p>
-            <p style="font-size:0.75rem; color:var(--text-muted); margin-top:0.4rem;">This screen refreshes live automatically.</p>
-          </div>
-        `;
+        content.innerHTML = alertHtml;
       }
       return;
     }
@@ -323,7 +485,7 @@ async function loadTaskDetails(taskId) {
 
     if (!runs || runs.length === 0) {
       meta.textContent = `Task ID: ${taskId}`;
-      content.textContent = "No run records found for this task.";
+      content.innerHTML = events.length ? "" : `<div class="empty-state">No run records found for this task.</div>`;
       return;
     }
 
@@ -339,16 +501,31 @@ async function loadTaskDetails(taskId) {
     if (latest.stdout) text += "=== STDOUT ===\n" + latest.stdout + "\n\n";
     if (latest.stderr) text += "=== STDERR ===\n" + latest.stderr + "\n\n";
     if (latest.error_reason) text += "=== ERROR ===\n" + latest.error_reason + "\n";
-    if (!text) text = "No console output recorded yet. Agent is initializing...";
 
-    content.textContent = text;
+    if (events.length > 0) {
+      content.innerHTML = text ? `
+        <details class="activity-tool-card">
+          <summary class="activity-tool-header">
+            <span class="tool-name-pill">RAW LOG</span>
+            <span class="activity-tool-target">Process STDOUT / STDERR &amp; Exit Details</span>
+          </summary>
+          <div class="activity-tool-body"><pre>${escapeHtml(text)}</pre></div>
+        </details>
+      ` : "";
+    } else {
+      content.innerHTML = `<pre class="output-terminal">${escapeHtml(text || "No console output recorded yet. Agent is initializing...")}</pre>`;
+    }
   } catch (err) {
-    content.textContent = "Failed to fetch task details: " + err.message;
+    content.innerHTML = `<pre class="output-terminal">Failed to fetch task details: ${escapeHtml(err.message)}</pre>`;
   }
 }
 
 function closeModal() {
   activeModalTaskId = null;
+  if (modalPollTimer) {
+    clearInterval(modalPollTimer);
+    modalPollTimer = null;
+  }
   const modal = document.getElementById("outputModal");
   if (modal) modal.style.display = "none";
 }
@@ -364,41 +541,65 @@ async function loadTaskFiles(taskId) {
     const data = await res.json();
 
     const changedFiles = data.changed_files || [];
-    if (badge) badge.textContent = changedFiles.length;
+    const activityFiles = data.activity_files || [];
+    if (badge) badge.textContent = changedFiles.length + activityFiles.length;
+
+    const fp = JSON.stringify(data);
+    if (fp === lastFilesFingerprint) return;
+    lastFilesFingerprint = fp;
 
     let html = `
       <div class="files-summary-bar">
         <div><strong>Working Directory:</strong> <span style="font-family:monospace; color:var(--accent-color);">${escapeHtml(data.working_dir)}</span></div>
-        <div><strong>Files Changed:</strong> <span style="color:#3fb950; font-weight:700;">${changedFiles.length}</span></div>
+        <div><strong>Modified:</strong> <span style="color:#3fb950; font-weight:700;">${changedFiles.length}</span> &bull; <strong>Tool Calls:</strong> <span style="color:#58a6ff; font-weight:700;">${activityFiles.length}</span></div>
       </div>
     `;
 
+    html += `<div class="files-section-heading">✏️ Modified Files on Disk (Git Diff)</div>`;
     if (changedFiles.length === 0) {
       html += `
-        <div class="empty-state" style="padding:2rem;">
-          <p style="font-size:0.95rem; color:var(--text-bright); margin-bottom:0.5rem;">ℹ️ No files modified on disk yet</p>
-          <p style="color:var(--text-muted); font-size:0.8rem;">Agents may currently be reading the codebase, planning, or negotiating before writing changes.</p>
-          ${data.context_files && data.context_files.length ? `<p style="margin-top:0.8rem; font-size:0.8rem;"><strong>Target Context Files:</strong> ${data.context_files.map(f => `<code>${escapeHtml(f)}</code>`).join(", ")}</p>` : ''}
+        <div class="empty-state" style="padding:1rem;">
+          <p style="font-size:0.85rem; color:var(--text-main);">No uncommitted modifications on disk yet.</p>
+          ${data.context_files && data.context_files.length ? `<p style="margin-top:0.5rem; font-size:0.78rem;"><strong>Target Context Files:</strong> ${data.context_files.map(f => `<code>${escapeHtml(f)}</code>`).join(", ")}</p>` : ''}
         </div>
       `;
-      container.innerHTML = html;
-      return;
+    } else {
+      changedFiles.forEach((file) => {
+        const statusClass = `file-status-${file.status || 'CHANGED'}`;
+        html += `
+          <div class="file-card">
+            <div class="file-card-header">
+              <span class="file-path">📄 ${escapeHtml(file.path)}</span>
+              <span class="file-status-badge ${statusClass}">${file.status}</span>
+            </div>
+            <div class="diff-viewer">${formatDiff(file.diff || '')}</div>
+          </div>
+        `;
+      });
     }
 
-    changedFiles.forEach((file) => {
-      const statusClass = `file-status-${file.status || 'CHANGED'}`;
-      const diffFormatted = formatDiff(file.diff || '');
-
-      html += `
-        <div class="file-card">
-          <div class="file-card-header">
-            <span class="file-path">📄 ${escapeHtml(file.path)}</span>
-            <span class="file-status-badge ${statusClass}">${file.status}</span>
-          </div>
-          <div class="diff-viewer">${diffFormatted}</div>
-        </div>
-      `;
-    });
+    html += `<div class="files-section-heading">🔍 Live Agent Tool &amp; File Activity</div>`;
+    if (activityFiles.length === 0) {
+      html += `<div class="empty-state" style="padding:1rem;">No tool invocations recorded for this task yet.</div>`;
+    } else {
+      activityFiles.forEach((act) => {
+        const lowerStatus = (act.status || "done").toLowerCase();
+        const dur = act.duration_seconds != null ? `${act.duration_seconds.toFixed(1)}s` : (lowerStatus === "running" ? "running…" : "");
+        html += `
+          <details class="activity-tool-card" data-status="${lowerStatus}">
+            <summary class="activity-tool-header">
+              ${toolStatusIcon(lowerStatus)}
+              ${agentBadgeHtml(act.agent)}
+              ${act.phase ? `<span class="phase-badge">${escapeHtml(act.phase)}</span>` : ""}
+              <span class="tool-name-pill">${escapeHtml(act.tool)}</span>
+              <span class="activity-tool-target" title="${escapeHtml(act.target)}">${escapeHtml(act.target)}</span>
+              <span class="activity-tool-duration">${dur}</span>
+            </summary>
+            <div class="activity-tool-body"><pre>${escapeHtml(act.output || "(no output)")}</pre></div>
+          </details>
+        `;
+      });
+    }
 
     container.innerHTML = html;
   } catch (err) {

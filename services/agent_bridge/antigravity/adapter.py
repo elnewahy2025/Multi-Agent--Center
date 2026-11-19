@@ -14,6 +14,8 @@ from packages.contracts.agent import (
 )
 from packages.contracts.enums import AgentType, PolicyMode
 from services.agent_bridge.base import BaseAgentAdapter
+from services.agent_bridge.antigravity.stream_parser import parse_antigravity_line
+from services.agent_bridge.streaming import ActivityEvent
 
 
 class AntigravityAdapter(BaseAgentAdapter):
@@ -85,7 +87,7 @@ class AntigravityAdapter(BaseAgentAdapter):
             "-p",
             request.prompt,
             "--output-format",
-            "json",
+            "stream-json",
             "--print-timeout",
             f"{request.timeout_seconds}s",
         ]
@@ -94,3 +96,7 @@ class AntigravityAdapter(BaseAgentAdapter):
             cmd.append("--dangerously-skip-permissions")
 
         return cmd
+
+    def parse_stream_line(self, line: str) -> List[ActivityEvent]:
+        """Translate Antigravity stream-json events into normalized activity events."""
+        return parse_antigravity_line(line)
