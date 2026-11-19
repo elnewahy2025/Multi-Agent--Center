@@ -61,6 +61,14 @@ class BaseAgentAdapter(abc.ABC):
         texts: Dict[str, str] = {}
         final_text: Optional[str] = None
         timed_out = threading.Event()
+        last_activity_time = start
+        stdout_line_count = 0
+        is_streaming_response = False
+        timer_lock = threading.Lock()
+        timer_state: Dict[str, object] = {"timer": None, "done": False}
+        max_deadline = start + request.timeout_seconds + min(120.0, float(request.timeout_seconds) * 2.0)
+        activity_window = min(15.0, max(0.2, float(request.timeout_seconds) * 0.5))
+        grace_step = min(30.0, max(0.5, float(request.timeout_seconds)))
 
         try:
             process = subprocess.Popen(
@@ -80,35 +88,62 @@ class BaseAgentAdapter(abc.ABC):
             for chunk in process.stderr:  # type: ignore[union-attr]
                 stderr_chunks.append(chunk)
 
+        def _schedule_timer(delay: float) -> None:
+            with timer_lock:
+                if timer_state["done"]:
+                    return
+                t = threading.Timer(delay, _on_timeout)
+                timer_state["timer"] = t
+                t.start()
+
         def _on_timeout() -> None:
+            now = time.time()
+            active_recently = (now - last_activity_time) < activity_window and (
+                is_streaming_response or stdout_line_count > 1
+            )
+            if active_recently and now < max_deadline and process.poll() is None:
+                remaining_grace = max_deadline - now
+                _schedule_timer(min(grace_step, remaining_grace))
+                return
             timed_out.set()
             self.cancel(request.run_id)
 
         err_thread = threading.Thread(target=_drain_stderr, daemon=True)
         err_thread.start()
-        timer = threading.Timer(request.timeout_seconds, _on_timeout)
-        timer.start()
+        _schedule_timer(float(request.timeout_seconds))
 
         try:
             for line in process.stdout:  # type: ignore[union-attr]
                 stdout_lines.append(line)
+                last_activity_time = time.time()
+                stdout_line_count += 1
                 for event in self._safe_parse(line):
                     if event.kind == "final":
                         final_text = event.content
+                        is_streaming_response = True
                         continue
                     if event.kind == "text":
+                        is_streaming_response = True
                         texts[event.key] = (texts.get(event.key, "") + (event.content or "")
                                             if event.append else (event.content or ""))
                     emit(event)
             process.wait()
         finally:
-            timer.cancel()
+            with timer_lock:
+                timer_state["done"] = True
+                active_timer = timer_state.get("timer")
+                if isinstance(active_timer, threading.Timer):
+                    active_timer.cancel()
             err_thread.join(timeout=5)
             self._active_processes.pop(request.run_id, None)
 
         duration = time.time() - start
         exit_code = process.returncode if process.returncode is not None else 1
         stderr_text = "".join(stderr_chunks)
+        if final_text is None and texts:
+            final_text = "\n\n".join(t.strip() for t in texts.values() if t.strip())
+        final_text = final_text or ""
+
         status, reason = TaskStatus.COMPLETED, None
         if timed_out.is_set():
             status, exit_code = TaskStatus.TIMED_OUT, 124
@@ -116,15 +151,16 @@ class BaseAgentAdapter(abc.ABC):
         elif exit_code != 0:
             status, reason = TaskStatus.FAILED, f"Process exited with non-zero code {exit_code}"
 
-        if final_text is None and texts:
-            final_text = "\n\n".join(t.strip() for t in texts.values() if t.strip())
         emit(ActivityEvent(key="process", kind="system",
                            status="done" if status == TaskStatus.COMPLETED else "failed",
                            title=f"{descriptor.name} finished — exit {exit_code} in {duration:.1f}s",
                            content=clip(stderr_text) if status != TaskStatus.COMPLETED else None,
                            duration_seconds=duration))
+        structured = {"final_text": final_text}
+        if status == TaskStatus.TIMED_OUT and len(final_text) >= 500:
+            structured["partial_timeout"] = True
         return self._result(request, status, exit_code, "".join(stdout_lines), stderr_text,
-                            duration, reason, {"final_text": final_text or ""})
+                            duration, reason, structured)
 
     def _safe_parse(self, line: str) -> List[ActivityEvent]:
         try:
