@@ -33,6 +33,17 @@ def parse_antigravity_line(line: str) -> List[ActivityEvent]:
         if result.get("status") not in (None, "SUCCESS"):
             events.append(ActivityEvent(key="result-error", kind="error", status="failed",
                                         content=clip(json.dumps(result))))
+        denied = result.get("denied_actions") or []
+        if isinstance(denied, list) and denied:
+            names = ", ".join(
+                str(d.get("display_name") or d.get("action") or d)
+                if isinstance(d, dict) else str(d)
+                for d in denied
+            )
+            events.append(ActivityEvent(
+                key="denied-actions", kind="error", status="failed",
+                content=f"Headless permission auto-denied tool action(s): {names}",
+            ))
         return events
 
     if event != "step_update":
@@ -57,8 +68,11 @@ def parse_antigravity_line(line: str) -> List[ActivityEvent]:
         if stype == "subagent":
             subs = (step.get("subagent_info") or {}).get("subagents") or [{}]
             title = subs[0].get("role") or title
+        err_obj = info.get("error")
+        err_msg = err_obj.get("message") if isinstance(err_obj, dict) else (err_obj if isinstance(err_obj, str) else None)
+        body = info.get("output") or err_msg
         return [ActivityEvent(key=key, kind="tool", status=status, tool=tool, title=title,
-                              content=clip(info.get("output")) if info.get("output") else None,
+                              content=clip(body) if body else None,
                               duration_seconds=step.get("duration_seconds"))]
 
     return []  # user_input echo

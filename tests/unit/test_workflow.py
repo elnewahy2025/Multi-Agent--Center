@@ -424,6 +424,63 @@ class TestCollaborativeWorkflow(unittest.TestCase):
             wt_dirty = mgr.create_worktree(str(repo), "tsk_sync", branch_name="collab-sync")
             self.assertEqual((wt_dirty / "a.txt").read_text(encoding="utf-8"), "dirty-edit\n")
 
+    def test_extract_prompt_repo_paths_and_empty_output_stderr_surfaced(self):
+        from services.orchestrator.workspace import WorkspaceManager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            desktop = Path(tmp) / "CompuMarts_Desktop"
+            target_repo = Path(tmp) / "Desktop" / "Smart-absecene-"
+            extra_repo = Path(tmp) / "Other Repo"
+            desktop.mkdir()
+            target_repo.mkdir(parents=True)
+            extra_repo.mkdir()
+            (target_repo / "package.json").write_text("{}", encoding="utf-8")
+
+            prompt = (
+                f"{target_repo}: this the repo that you must inspect/audit especially vs {extra_repo}!"
+            )
+            mgr = WorkspaceManager(worktrees_root=Path(tmp) / "wt")
+            extracted = mgr.extract_existing_paths_from_text(prompt)
+            self.assertEqual(extracted, [target_repo.resolve(), extra_repo.resolve()])
+
+            eff_root, add_dirs = mgr.resolve_effective_project_and_add_dirs(
+                str(desktop), prompt, [],
+            )
+            self.assertEqual(Path(eff_root).resolve(), target_repo.resolve())
+            self.assertEqual(add_dirs, [str(extra_repo.resolve())])
+
+            # Empty output from adapter with stderr surfaces stderr in verification_report & ErrorLogModel
+            class _EmptyWithStderrAdapter:
+                def __init__(self, agent_type):
+                    self.agent_type = agent_type
+
+                def execute(self, request, on_event=None):
+                    return AgentExecutionResult(
+                        task_id=request.task_id, run_id=request.run_id, agent_type=self.agent_type,
+                        status=TaskStatus.COMPLETED, exit_code=0,
+                        stdout="", stderr="jetski: no output produced — read_file permission auto-denied.",
+                        duration_seconds=1.2, structured_output={"final_text": ""},
+                    )
+
+            class _StubReg:
+                def get_adapter(self, at):
+                    return _EmptyWithStderrAdapter(at)
+
+            engine = CollaborativeWorkflowEngine(registry=_StubReg(), workspace_mgr=mgr)
+            task_id = f"tsk_{uuid.uuid4().hex[:8]}"
+            with get_db_session() as s:
+                s.add(TaskModel(id=task_id, title="Empty stderr test", description=prompt, status="PENDING"))
+            try:
+                wf = engine.run_collaborative_workflow(task_id)
+                self.assertEqual(wf.status, "FAILED")
+                self.assertIn("read_file permission auto-denied", wf.verification_report or "")
+                with get_db_session() as s:
+                    err = s.query(ErrorLogModel).filter_by(task_id=task_id).first()
+                    self.assertIsNotNone(err)
+                    self.assertIn("read_file permission auto-denied", err.message)
+            finally:
+                self._cleanup_task(task_id)
+
 
 if __name__ == "__main__":
     unittest.main()

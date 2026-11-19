@@ -409,8 +409,33 @@ class CollaborativeWorkflowEngine:
 
         text = self._extract_text_content(res.stdout, res)
         if not text:
-            err_msg = f"{agent_val} completed {stage_label} but output was empty."
+            detail = (res.stderr or "").strip()
+            if not detail and res.stdout:
+                for raw_line in reversed(res.stdout.splitlines()):
+                    s_line = raw_line.strip()
+                    if s_line.startswith("{"):
+                        try:
+                            obj = json.loads(s_line)
+                            r_obj = obj.get("result") if isinstance(obj.get("result"), dict) else obj
+                            if isinstance(r_obj, dict):
+                                if r_obj.get("denied_actions"):
+                                    detail = f"Permission denied in headless mode for: {r_obj['denied_actions']}"
+                                    break
+                                if r_obj.get("error"):
+                                    detail = str(r_obj["error"])
+                                    break
+                        except Exception:
+                            pass
+            err_msg = (
+                f"{agent_val} completed {stage_label} but output was empty. {detail}".strip()
+                if detail
+                else f"{agent_val} completed {stage_label} but output was empty."
+            )
             self._record_error(task_id, workflow_id, source, f"Empty {stage_label} Output", err_msg, res.stderr)
+            self._record_message(
+                workflow_id, adapter.agent_type, recipient, phase,
+                f"❌ [{stage_label} Failed — {err_msg}]",
+            )
             self._fail_workflow(workflow_id, task_id, err_msg)
             return None
 
@@ -471,7 +496,31 @@ class CollaborativeWorkflowEngine:
         if not inspector_adapter or not worker_adapter:
             raise RuntimeError(f"Both {inspector_name} and {worker_name} adapters must be available for collaboration.")
 
-        worktree_dir = self._allocate_worktree(project_root, task_id)
+        if hasattr(self.workspace_mgr, "resolve_effective_project_and_add_dirs"):
+            effective_root, add_dirs = self.workspace_mgr.resolve_effective_project_and_add_dirs(
+                project_root, task_desc, context_files,
+            )
+        else:
+            effective_root, add_dirs = project_root, []
+        if effective_root != project_root:
+            with get_db_session() as session:
+                session.add(AuditLogModel(
+                    task_id=task_id, run_id=workflow_id, event_type="TARGET_SCOPE_RESOLVED",
+                    message=f"Resolved target root to '{effective_root}' from prompt/context (was '{project_root}').",
+                ))
+
+        worktree_dir = self._allocate_worktree(effective_root, task_id)
+        stage_add_dirs: List[str] = []
+        seen_add = {str(Path(worktree_dir).resolve())}
+        for d in [*add_dirs, effective_root]:
+            try:
+                norm_d = str(Path(d).resolve())
+            except OSError:
+                continue
+            if norm_d not in seen_add:
+                seen_add.add(norm_d)
+                stage_add_dirs.append(norm_d)
+
         formatted_desc = normalize_task_prompt(task_desc, context_files)
         file_map = self._build_workspace_file_map(worktree_dir, context_files)
         scope_note = (
@@ -504,6 +553,7 @@ class CollaborativeWorkflowEngine:
                 working_directory=worktree_dir, worktree_name=None,
                 policy_mode=PolicyMode.STRICT, timeout_seconds=600,
                 context_files=context_files,
+                extra_flags={"add_dirs": stage_add_dirs},
             ),
         )
         if proposal_text is None:
@@ -528,6 +578,7 @@ class CollaborativeWorkflowEngine:
                 working_directory=worktree_dir, worktree_name=None,
                 policy_mode=PolicyMode.STRICT, timeout_seconds=600,
                 context_files=context_files,
+                extra_flags={"add_dirs": stage_add_dirs},
             ),
         )
         if negotiation_text is None:
@@ -586,6 +637,7 @@ class CollaborativeWorkflowEngine:
                     prompt=execution_prompt, working_directory=worktree_dir, worktree_name=None,
                     policy_mode=PolicyMode.AUTO_LOW_IMPACT, timeout_seconds=900,
                     context_files=context_files,
+                    extra_flags={"add_dirs": stage_add_dirs},
                 ),
             )
             if execution_text is None:
@@ -617,6 +669,7 @@ class CollaborativeWorkflowEngine:
                     working_directory=worktree_dir, worktree_name=None,
                     policy_mode=PolicyMode.STRICT, timeout_seconds=600,
                     context_files=context_files,
+                    extra_flags={"add_dirs": stage_add_dirs},
                 ),
                 severity="WARNING",
             )

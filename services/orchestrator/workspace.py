@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+_WIN_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n:*?\"<>|]+")
+
+
 class WorkspaceManager:
     """Manages Git worktrees for isolated agent task execution."""
 
@@ -219,3 +222,94 @@ class WorkspaceManager:
                 normalized.append(s)
 
         return str(project_root), normalized
+
+    @staticmethod
+    def _is_subpath(child: Path, parent: Path) -> bool:
+        try:
+            child.resolve().relative_to(parent.resolve())
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def extract_existing_paths_from_text(text: str) -> List[Path]:
+        """Extract deduplicated existing Windows drive paths mentioned in prompt text."""
+        if not text:
+            return []
+        found: List[Path] = []
+        seen = set()
+        for match in _WIN_PATH_RE.finditer(text):
+            raw = match.group(0).strip()
+            parts = raw
+            while parts:
+                cleaned = parts.rstrip("\"'.,;!?)]}> \t")
+                if len(cleaned) <= 3:
+                    break
+                try:
+                    p = Path(cleaned)
+                    if p.exists():
+                        resolved = p.resolve()
+                        if resolved.parent != resolved and resolved not in seen:
+                            seen.add(resolved)
+                            found.append(resolved)
+                        break
+                except OSError:
+                    pass
+                if " " not in parts and "\t" not in parts:
+                    break
+                parts = parts.rsplit(None, 1)[0]
+        return found
+
+    def resolve_effective_project_and_add_dirs(
+        self,
+        project_root: str,
+        task_desc: str,
+        context_files: Optional[List[str]] = None,
+    ) -> Tuple[str, List[str]]:
+        """Resolve an effective working root and external --add-dir folders from prompt & context."""
+        repo_root = Path(__file__).resolve().parents[2].resolve()
+        root_path = Path(project_root).resolve() if project_root else repo_root
+
+        candidate_paths: List[Path] = self.extract_existing_paths_from_text(task_desc)
+        for cf in (context_files or []):
+            s = (cf or "").strip()
+            if not s:
+                continue
+            p_cf = Path(s)
+            if p_cf.is_absolute():
+                try:
+                    if p_cf.exists():
+                        candidate_paths.append(p_cf.resolve())
+                except OSError:
+                    pass
+
+        candidate_dirs: List[Path] = []
+        seen_dirs = set()
+        for p in candidate_paths:
+            d = p if p.is_dir() else (self._find_git_root(p.parent) or p.parent)
+            if d not in seen_dirs:
+                seen_dirs.add(d)
+                candidate_dirs.append(d)
+
+        effective_root_path = root_path
+        root_has_git = (root_path / ".git").exists()
+        is_default_repo = root_path == repo_root
+
+        for cand_dir in candidate_dirs:
+            cand_target = self._find_git_root(cand_dir) or cand_dir
+            if cand_target != root_path and (
+                not root_has_git or (is_default_repo and not self._is_subpath(cand_dir, repo_root))
+            ):
+                effective_root_path = cand_target
+                break
+
+        add_dirs: List[str] = []
+        seen_add = set()
+        for cand_dir in candidate_dirs:
+            if not self._is_subpath(cand_dir, effective_root_path):
+                s_dir = str(cand_dir)
+                if s_dir not in seen_add:
+                    seen_add.add(s_dir)
+                    add_dirs.append(s_dir)
+
+        return str(effective_root_path), add_dirs
