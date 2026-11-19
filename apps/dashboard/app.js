@@ -29,6 +29,9 @@ let currentModalTab = "chat";
 let modalPollTimer = null;
 const eventFingerprints = new Map();
 let lastFilesFingerprint = null;
+let lastModalContentFingerprint = null;
+let lastApprovalsFingerprint = null;
+let pendingDecisionInFlight = false;
 let scopeMode = "folder";
 let selectedContextFiles = [];
 let workspaceRootPath = "";
@@ -818,6 +821,7 @@ function viewTaskDetails(taskId, tab = "chat") {
   activeModalTaskId = taskId;
   if (isNewTask) {
     lastRenderedTaskId = taskId;
+    lastModalContentFingerprint = null;
     eventFingerprints.clear();
     lastFilesFingerprint = null;
     const feed = document.getElementById("liveActivityFeed");
@@ -1012,10 +1016,21 @@ async function loadTaskDetails(taskId) {
     renderStageStepper(workflow);
     renderActivityFeed(events);
 
+    if (pendingDecisionInFlight) return;
     const focused = document.activeElement;
-    if (focused && content.contains(focused) && focused.classList.contains("approval-note-input")) {
+    if (
+      focused && content.contains(focused) && (
+        focused.classList.contains("approval-note-input")
+        || focused.classList.contains("btn-approve")
+        || focused.classList.contains("btn-deny")
+      )
+    ) {
       return;
     }
+
+    const aprFp = pendingApproval
+      ? `${pendingApproval.id}|${pendingApproval.action_type}|${pendingApproval.risk_level}`
+      : "none";
 
     const existingModalNotes = {};
     content.querySelectorAll(".approval-note-input").forEach((inp) => {
@@ -1035,14 +1050,17 @@ async function loadTaskDetails(taskId) {
           <input type="text" class="approval-note-input" id="modalAprNote_${escapeHtml(pendingApproval.id)}"
             placeholder="Optional instructions for agents (e.g. skip driver upgrade, fix test)...">
           <div class="approval-actions">
-            <button class="btn btn-approve" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'APPROVED')">Approve &amp; Continue ✓</button>
-            <button class="btn btn-deny" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'DENIED')">Deny &amp; Stop ✕</button>
+            <button type="button" class="btn btn-approve" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'APPROVED', this)">Approve &amp; Continue ✓</button>
+            <button type="button" class="btn btn-deny" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'DENIED', this)">Deny &amp; Stop ✕</button>
           </div>
         </div>
       `;
     }
 
     if (workflow) {
+      const modalFp = `${taskId}|wf|${workflow.id}|${workflow.current_phase}|${workflow.status}|${workflow.is_verified}|${(workflow.messages || []).length}|${(workflow.verification_report || "").length}|${aprFp}`;
+      if (modalFp === lastModalContentFingerprint) return;
+
       const inspector = getAgentMeta(workflow.inspector_agent || "ANTIGRAVITY");
       const worker = getAgentMeta(workflow.worker_agent || "OPENCODE");
       document.getElementById("modalTitle").textContent = `Bilateral Teamwork: ${inspector.short} ↔ ${worker.short}`;
@@ -1092,6 +1110,7 @@ async function loadTaskDetails(taskId) {
       } else {
         content.innerHTML = alertHtml;
       }
+      lastModalContentFingerprint = modalFp;
       Object.entries(existingModalNotes).forEach(([id, val]) => {
         const inp = document.getElementById(id);
         if (inp) inp.value = val;
@@ -1105,12 +1124,22 @@ async function loadTaskDetails(taskId) {
     const runs = await res.json();
 
     if (!runs || runs.length === 0) {
+      const noRunFp = `${taskId}|norun|${events.length}|${aprFp}`;
+      if (noRunFp === lastModalContentFingerprint) return;
       meta.textContent = `Task ID: ${taskId}`;
       content.innerHTML = approvalBannerHtml + (events.length ? "" : `<div class="empty-state">No run records found for this task.</div>`);
+      lastModalContentFingerprint = noRunFp;
+      Object.entries(existingModalNotes).forEach(([id, val]) => {
+        const inp = document.getElementById(id);
+        if (inp) inp.value = val;
+      });
       return;
     }
 
     const latest = runs[0];
+    const runsFp = `${taskId}|run|${latest.id}|${latest.status}|${latest.exit_code}|${(latest.stdout || "").length}|${(latest.stderr || "").length}|${events.length}|${aprFp}`;
+    if (runsFp === lastModalContentFingerprint) return;
+
     meta.innerHTML = `
       <strong>Agent:</strong> ${latest.agent_type} &bull;
       <strong>Status:</strong> <span class="status-badge status-${latest.status}">${latest.status}</span> &bull;
@@ -1136,6 +1165,7 @@ async function loadTaskDetails(taskId) {
     } else {
       content.innerHTML = approvalBannerHtml + `<pre class="output-terminal">${escapeHtml(text || "No console output recorded yet. Agent is initializing...")}</pre>`;
     }
+    lastModalContentFingerprint = runsFp;
     Object.entries(existingModalNotes).forEach(([id, val]) => {
       const inp = document.getElementById(id);
       if (inp) inp.value = val;
@@ -1147,6 +1177,7 @@ async function loadTaskDetails(taskId) {
 
 function closeModal() {
   activeModalTaskId = null;
+  lastModalContentFingerprint = null;
   if (modalPollTimer) {
     clearInterval(modalPollTimer);
     modalPollTimer = null;
@@ -1248,19 +1279,30 @@ async function fetchApprovals() {
   const container = document.getElementById("approvalsList");
   const badge = document.getElementById("approvalsBadge");
   try {
-    if (document.activeElement && container.contains(document.activeElement)
-        && document.activeElement.classList.contains("approval-note-input")) {
+    if (pendingDecisionInFlight) return;
+    if (
+      document.activeElement && container.contains(document.activeElement) && (
+        document.activeElement.classList.contains("approval-note-input")
+        || document.activeElement.classList.contains("btn-approve")
+        || document.activeElement.classList.contains("btn-deny")
+      )
+    ) {
       return;
     }
-    const existingNotes = {};
-    container.querySelectorAll(".approval-note-input").forEach((inp) => { existingNotes[inp.id] = inp.value; });
 
     const res = await fetch(`${API_BASE}/approvals`);
     const approvals = await res.json();
     badge.textContent = approvals.length;
 
+    const approvalsFp = approvals.map((a) => `${a.id}|${a.action_type}|${a.risk_level}`).join(",");
+    if (approvalsFp === lastApprovalsFingerprint) return;
+
+    const existingNotes = {};
+    container.querySelectorAll(".approval-note-input").forEach((inp) => { existingNotes[inp.id] = inp.value; });
+
     if (approvals.length === 0) {
       container.innerHTML = `<p class="empty-state">No actions currently require human approval.</p>`;
+      lastApprovalsFingerprint = approvalsFp;
       return;
     }
 
@@ -1275,11 +1317,12 @@ async function fetchApprovals() {
         <input type="text" class="approval-note-input" id="aprNote_${escapeHtml(a.id)}"
           placeholder="Optional instructions for agents (e.g. skip driver upgrade, fix test)...">
         <div class="approval-actions">
-          <button class="btn btn-approve" onclick="decideApproval('${escapeHtml(a.id)}', 'APPROVED')">Approve &amp; Continue ✓</button>
-          <button class="btn btn-deny" onclick="decideApproval('${escapeHtml(a.id)}', 'DENIED')">Deny &amp; Stop ✕</button>
+          <button type="button" class="btn btn-approve" onclick="decideApproval('${escapeHtml(a.id)}', 'APPROVED', this)">Approve &amp; Continue ✓</button>
+          <button type="button" class="btn btn-deny" onclick="decideApproval('${escapeHtml(a.id)}', 'DENIED', this)">Deny &amp; Stop ✕</button>
         </div>
       </div>
     `).join("");
+    lastApprovalsFingerprint = approvalsFp;
 
     Object.entries(existingNotes).forEach(([id, val]) => {
       const inp = document.getElementById(id);
@@ -1290,7 +1333,17 @@ async function fetchApprovals() {
   }
 }
 
-async function decideApproval(approvalId, decision) {
+async function decideApproval(approvalId, decision, btnEl = null) {
+  if (pendingDecisionInFlight) return;
+  pendingDecisionInFlight = true;
+  const actionsWrap = btnEl ? btnEl.closest(".approval-actions") : null;
+  const actionButtons = actionsWrap ? Array.from(actionsWrap.querySelectorAll("button")) : (btnEl ? [btnEl] : []);
+  const origLabel = btnEl ? btnEl.textContent : "";
+  actionButtons.forEach((b) => { b.disabled = true; });
+  if (btnEl) {
+    btnEl.textContent = decision === "APPROVED" ? "⏳ Approving…" : "⏳ Denying…";
+  }
+
   try {
     const modalNote = document.getElementById(`modalAprNote_${approvalId}`);
     const listNote = document.getElementById(`aprNote_${approvalId}`);
@@ -1301,12 +1354,21 @@ async function decideApproval(approvalId, decision) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ decision, decided_by: "Ahmed", reason: note || null }),
     });
-    if (!res.ok) throw new Error("Decision submission failed");
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || "Decision submission failed");
+    }
+    lastModalContentFingerprint = null;
+    lastApprovalsFingerprint = null;
+    pendingDecisionInFlight = false;
     await Promise.all([fetchApprovals(), fetchTasks(), fetchAudit()]);
     if (activeModalTaskId) {
       await loadTaskDetails(activeModalTaskId);
     }
   } catch (err) {
+    actionButtons.forEach((b) => { b.disabled = false; });
+    if (btnEl) btnEl.textContent = origLabel;
+    pendingDecisionInFlight = false;
     alert("Approval error: " + err.message);
   }
 }
