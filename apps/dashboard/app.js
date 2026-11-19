@@ -16,9 +16,44 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(refreshData, 2000);
 });
 
+function deriveTitleFromPrompt(desc) {
+  let firstLine = "";
+  for (const raw of (desc || "").split(/\r?\n/)) {
+    const cleaned = raw.replace(/^[#*\->\s]+/, "").trim();
+    if (cleaned) { firstLine = cleaned; break; }
+  }
+  if (!firstLine) return "";
+  const filler = /^(?:please|can you|could you|would you|i want(?: you)? to|help me|task\s*:)\s+/i;
+  for (let i = 0; i < 3; i++) {
+    const next = firstLine.replace(filler, "").trim();
+    if (next === firstLine) break;
+    firstLine = next;
+  }
+  const clause = firstLine.split(/[.?!;](?:\s|$)/)[0].replace(/\s+/g, " ").trim().replace(/^[ :\-]+|[ :\-]+$/g, "");
+  if (!clause) return "";
+  const titled = clause.charAt(0).toUpperCase() + clause.slice(1);
+  if (titled.length <= 65) return titled;
+  const sub = titled.slice(0, 64);
+  const idx = sub.lastIndexOf(" ");
+  return (idx > 0 ? sub.slice(0, idx) : sub).replace(/[,;:\-]+$/, "") + "…";
+}
+
 function setupEventListeners() {
   document.getElementById("btnRefresh").addEventListener("click", refreshData);
   document.getElementById("taskForm").addEventListener("submit", handleTaskSubmit);
+
+  const descEl = document.getElementById("taskDesc");
+  const titleEl = document.getElementById("taskTitle");
+  if (descEl && titleEl) {
+    descEl.addEventListener("input", () => {
+      if (!titleEl.value.trim()) {
+        const autoTitle = deriveTitleFromPrompt(descEl.value);
+        titleEl.placeholder = autoTitle
+          ? `Auto-title: ${autoTitle}`
+          : "Auto-generated from your prompt below (or type a custom title)";
+      }
+    });
+  }
 
   const btnClose = document.getElementById("btnCloseModal");
   if (btnClose) btnClose.addEventListener("click", closeModal);
@@ -114,6 +149,7 @@ async function fetchTasks() {
           <button class="btn btn-sm btn-run" onclick="executeTask('${t.id}')">Run</button>
           <button class="btn btn-sm btn-team" onclick="collaborateTask('${t.id}')">Team Run ⚡</button>
           <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
+          <button class="btn-dismiss" onclick="deleteTask('${t.id}')" title="Delete task">✕</button>
         `;
       } else if (t.status === "RUNNING") {
         actionHtml = `
@@ -133,19 +169,24 @@ async function fetchTasks() {
         actionHtml = `
           <button class="btn btn-sm btn-view" onclick="viewTaskDetails('${t.id}', 'chat')">Log</button>
           <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
+          <button class="btn-dismiss" onclick="deleteTask('${t.id}')" title="Delete task">✕</button>
         `;
       } else if (t.status === "FAILED" || t.status === "CANCELLED") {
         actionHtml = `
           <button class="btn btn-sm btn-view" style="background:#da3633;" onclick="viewTaskDetails('${t.id}', 'chat')">Details</button>
           <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
           <button class="btn btn-sm btn-secondary" onclick="collaborateTask('${t.id}')" title="Retry task with collaborative team">Retry ↺</button>
+          <button class="btn-dismiss" onclick="deleteTask('${t.id}')" title="Delete task">✕</button>
         `;
       }
 
       return `
         <tr>
           <td style="font-family: monospace;">${t.id.slice(0, 8)}...</td>
-          <td><strong>${escapeHtml(t.title)}</strong></td>
+          <td>
+            <strong>${escapeHtml(t.title)}</strong>
+            <div style="font-size:0.73rem; color:var(--text-muted); max-width:340px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${escapeHtml(t.description)}">${escapeHtml(t.description)}</div>
+          </td>
           <td>${t.assigned_agent || "Antigravity + OpenCode"}</td>
           <td><span class="status-badge status-${t.status}">${t.status}</span></td>
           <td style="font-size:0.75rem; color:var(--text-muted);">${t.worktree_path ? escapeHtml(t.worktree_path.split('\\\\').pop().split('/').pop()) : 'Root'}</td>
@@ -169,7 +210,7 @@ async function handleTaskSubmit(e) {
   const useWorktree = document.getElementById("useWorktree").checked;
 
   const payload = {
-    title,
+    title: title || null,
     description,
     policy_mode: policyVal,
     use_worktree: useWorktree,
@@ -186,10 +227,23 @@ async function handleTaskSubmit(e) {
 
     if (!res.ok) throw new Error("Submission failed");
     document.getElementById("taskForm").reset();
+    document.getElementById("taskTitle").placeholder = "Auto-generated from your prompt below (or type a custom title)";
     document.getElementById("useWorktree").checked = true;
     await fetchTasks();
   } catch (err) {
     alert("Error submitting task: " + err.message);
+  }
+}
+
+async function deleteTask(taskId) {
+  if (!confirm("Delete this task and its local history?")) return;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${taskId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("Failed to delete task");
+    if (activeModalTaskId === taskId) closeModal();
+    await Promise.all([fetchTasks(), fetchApprovals(), fetchErrors(), fetchAudit()]);
+  } catch (err) {
+    alert("Delete error: " + err.message);
   }
 }
 

@@ -11,6 +11,7 @@ from packages.contracts.task import (
     TaskCreate,
     TaskRead,
     TaskUpdate,
+    derive_task_title,
 )
 from packages.contracts.agent import (
     AgentCapabilities,
@@ -37,6 +38,7 @@ __all__ = [
     "TaskCreate",
     "TaskRead",
     "TaskUpdate",
+    "derive_task_title",
     "AgentCapabilities",
     "AgentDescriptor",
     "AgentExecutionRequest",
