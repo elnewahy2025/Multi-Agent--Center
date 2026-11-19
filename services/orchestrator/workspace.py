@@ -268,9 +268,11 @@ class WorkspaceManager:
     ) -> Tuple[str, List[str]]:
         """Resolve an effective working root and external --add-dir folders from prompt & context."""
         repo_root = Path(__file__).resolve().parents[2].resolve()
+        uploads_dir = (repo_root / "data" / "uploads").resolve()
         root_path = Path(project_root).resolve() if project_root else repo_root
 
         candidate_paths: List[Path] = self.extract_existing_paths_from_text(task_desc)
+        force_add_dirs: List[Path] = []
         for cf in (context_files or []):
             s = (cf or "").strip()
             if not s:
@@ -279,7 +281,12 @@ class WorkspaceManager:
             if p_cf.is_absolute():
                 try:
                     if p_cf.exists():
-                        candidate_paths.append(p_cf.resolve())
+                        resolved_cf = p_cf.resolve()
+                        if self._is_subpath(resolved_cf, uploads_dir):
+                            if uploads_dir not in force_add_dirs:
+                                force_add_dirs.append(uploads_dir)
+                        else:
+                            candidate_paths.append(resolved_cf)
                 except OSError:
                     pass
 
@@ -305,7 +312,7 @@ class WorkspaceManager:
 
         add_dirs: List[str] = []
         seen_add = set()
-        for cand_dir in candidate_dirs:
+        for cand_dir in [*candidate_dirs, *force_add_dirs]:
             if not self._is_subpath(cand_dir, effective_root_path):
                 s_dir = str(cand_dir)
                 if s_dir not in seen_add:

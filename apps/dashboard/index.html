@@ -3,223 +3,303 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0f14">
   <title>AI Coding Command Center</title>
-  <link rel="stylesheet" href="styles.css?v=20261119d">
+  <link rel="stylesheet" href="styles.css?v=20261119g">
 </head>
 <body>
-  <header class="header">
-    <div class="logo-area">
-      <div class="logo-icon">⚡</div>
-      <div>
-        <h1>AI Coding Command Center</h1>
-        <p class="subtitle">Multi-Agent Hybrid Orchestration Control Plane</p>
+  <a href="#workspaceMain" class="skip-link visually-hidden">Skip to workspace</a>
+  <div id="statusAnnouncer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Row 1: Top Navigation & Detected Coding Agents Bar -->
+  <header class="topbar">
+    <div class="topbar-main">
+      <div class="topbar-brand">
+        <span class="brand-mark" aria-hidden="true">⚡</span>
+        <h1 class="brand-title">AI Coding Command Center</h1>
+      </div>
+
+      <div class="topbar-utilities">
+        <span class="status-pill status-healthy" id="dbStatus">DB: Connecting…</span>
+        <span class="status-pill status-healthy" id="errorPill">Errors: 0</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnOpenHistory">
+          History <span class="count-pill" id="historyCount">0</span>
+        </button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnOpenFiles">
+          Files <span class="count-pill" id="headerFilesCount">0</span>
+        </button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnOpenAudit">Audit</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnRefresh" aria-label="Refresh dashboard status">↻ Refresh</button>
       </div>
     </div>
-    <div class="system-status">
-      <span class="status-pill status-healthy" id="dbStatus">DB: Connecting...</span>
-      <span class="status-pill status-agent" id="agentsCount">Agents: 0</span>
-      <span class="status-pill status-healthy" id="errorPill">Errors: 0</span>
-      <button class="btn btn-secondary btn-sm" id="btnRefresh">Refresh</button>
+
+    <div class="agents-strip" aria-label="Detected Coding Agents">
+      <span class="strip-label">Detected Coding Agents <span class="count-pill" id="agentsCount">0</span></span>
+      <div class="agents-pill-list" id="agentsGrid">
+        <span class="agent-chip-loading">Scanning host agents…</span>
+      </div>
     </div>
   </header>
 
-  <main class="container">
-    <!-- Active Agents Grid -->
-    <section class="section">
-      <div class="section-header">
-        <h2>Detected Coding Agents</h2>
-        <span class="badge">Host System</span>
-      </div>
-      <div class="agents-grid" id="agentsGrid">
-        <div class="card card-loading">Scanning host agents...</div>
-      </div>
-    </section>
+  <main id="workspaceMain" class="cockpit" tabindex="-1">
+    <!-- Row 2: Unified Composer (Left: Add Files/Folders + Add Images | Right: Prompt Text Area) -->
+    <section class="composer-section" aria-label="Task Composer">
+      <form id="taskForm" class="composer-grid" novalidate>
+        <!-- Left Box: Add Files/Folders Area + Add Images -->
+        <div class="panel-card composer-attach-card" id="attachmentsPanel">
+          <div class="attach-group">
+            <div class="attach-header">
+              <span class="micro-label">Add Files / Folders Area</span>
+              <div class="attach-btn-row">
+                <button type="button" class="btn btn-subtle btn-sm scope-mode-btn active" id="btnScopeFolder">📁 Folder…</button>
+                <button type="button" class="btn btn-subtle btn-sm scope-mode-btn" id="btnScopeFiles">📄 Files…</button>
+              </div>
+            </div>
 
-    <!-- Task Dispatcher & Pending Approvals -->
-    <div class="two-col">
-      <!-- Create Task -->
-      <section class="section">
-        <div class="section-header">
-          <h2>Submit New Task</h2>
-        </div>
-        <form id="taskForm" class="card task-form">
-          <div class="form-group">
-            <label for="taskTitle">Task Title <span style="color:var(--text-muted); font-weight:400;">(Optional — auto-generated from prompt if left blank)</span></label>
-            <input type="text" id="taskTitle" placeholder="Auto-generated from your prompt below (or type a custom title)">
-          </div>
-          <div class="form-group">
-            <div class="prompt-label-row">
-              <label for="taskDesc">Instructions / Prompt &mdash; or Paste Code to Fix</label>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnPasteCode" title="Paste clipboard code or wrap selection in a code block">📋 Paste / Wrap Code Snippet</button>
-            </div>
-            <textarea id="taskDesc" class="code-prompt-box" rows="6" placeholder="Describe the task, OR paste a raw code snippet directly here to inspect &amp; fix (Tab indents)..." required></textarea>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="taskAgent">Target Agent</label>
-              <select id="taskAgent">
-                <option value="">Auto (Best Available)</option>
-                <option value="OPENCODE">OpenCode Desktop CLI</option>
-                <option value="ANTIGRAVITY">Google Antigravity CLI</option>
-                <option value="CLAUDE_CODE">Claude Code CLI</option>
-                <option value="QWEN_CODE">Qwen Code CLI</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="taskPolicy">Autonomy Policy</label>
-              <select id="taskPolicy">
-                <option value="AUTO_LOW_IMPACT">Auto Low Impact (Default)</option>
-                <option value="ASK">Ask on High Risk</option>
-                <option value="STRICT">Strict Approval</option>
-                <option value="ALLOW_ALL">Allow All (Sandbox)</option>
-              </select>
-            </div>
-          </div>
-          <div class="form-group">
-            <label for="projectPath">Target Scope (Entire Folder or Specific File(s) / Subfolder)</label>
-            <div class="scope-toolbar">
-              <button type="button" class="scope-mode-btn active" id="btnScopeFolder" onclick="handleScopeFolderClick()">📁 Entire Folder</button>
-              <button type="button" class="scope-mode-btn" id="btnScopeFiles" onclick="handleScopeFilesClick()">📄 Specific File(s) / Subfolder</button>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFolder" onclick="handleBrowseFolderClick()">📂 Browse Folder…</button>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnPickFile" onclick="handleBrowseFileClick()">📄 Browse File…</button>
-            </div>
             <div class="scope-input-row">
-              <input type="text" id="projectPath" list="workspacePathsList" placeholder="C:\Users\ahmed\AI-Coding-Command-Center (or type/pick a file or subfolder)">
-              <button type="button" class="btn btn-secondary btn-sm" id="btnAddTarget" onclick="handleAddTargetClick()" style="display:none; white-space:nowrap;">+ Add Target</button>
-            </div>
-            <div id="fsExplorerPanel" class="fs-explorer-panel" style="display: none;">
-              <div class="fs-explorer-header">
-                <span class="fs-explorer-title" id="fsExplorerTitle">📁 Browse Target Folder</span>
-                <div class="fs-explorer-nav">
-                  <button type="button" class="btn btn-secondary btn-sm" id="btnFsParent" onclick="browseParentDir()">⬆️ Parent Folder</button>
-                  <button type="button" class="btn btn-secondary btn-sm" id="btnFsRoot" onclick="browseProjectRoot()">🏠 Project Root</button>
-                  <button type="button" class="btn btn-secondary btn-sm" id="btnFsClose" onclick="closeFsExplorer()">✕ Close</button>
-                </div>
-              </div>
-              <div class="fs-path-bar">
-                <span class="fs-path-label" id="fsCurrentDirLabel">Loading…</span>
-                <span class="fs-drives-bar" id="fsDrivesBar"></span>
-              </div>
-              <div class="fs-search-row">
-                <input type="text" id="fsSearchInput" placeholder="Search or filter files &amp; folders..." oninput="handleFsSearchInput(this.value)">
-                <button type="button" class="btn btn-approve btn-sm" id="btnUseCurrentFolder" onclick="useCurrentExplorerFolder()" style="white-space:nowrap;">✓ Use This Entire Folder</button>
-                <button type="button" class="btn btn-approve btn-sm" id="btnFsDone" onclick="closeFsExplorer()" style="display:none; white-space:nowrap;">✓ Done</button>
-                <button type="button" class="btn btn-secondary btn-sm" id="btnFsClearSelected" onclick="clearSelectedTargets()" style="display:none; white-space:nowrap;">Clear Selected</button>
-              </div>
-              <div id="fsEntriesList" class="fs-entries-list">
-                <div class="empty-state">Loading directory contents…</div>
-              </div>
+              <label for="projectPath" class="visually-hidden">Target folder or file path</label>
+              <input type="text" id="projectPath" class="text-input text-input-sm" list="workspacePathsList"
+                placeholder="Folder or relative file path…">
+              <button type="button" class="btn btn-subtle btn-sm" id="btnAddTarget" hidden>+ Add</button>
             </div>
             <datalist id="workspacePathsList"></datalist>
-            <div id="selectedFilesChips" class="selected-files-chips"></div>
+            <div id="selectedFilesChips" class="chip-list"></div>
           </div>
-          <div class="form-checkbox">
-            <input type="checkbox" id="useWorktree" checked>
-            <label for="useWorktree">Isolate in dedicated Git worktree</label>
-          </div>
-          <button type="submit" class="btn btn-primary" id="btnSubmitTask">Submit Task</button>
-        </form>
-      </section>
 
-      <!-- Approvals -->
-      <section class="section">
-        <div class="section-header">
-          <h2>Pending Human Approvals</h2>
-          <span class="badge badge-warning" id="approvalsBadge">0</span>
+          <div class="attach-divider" aria-hidden="true"></div>
+
+          <div class="attach-group">
+            <div class="attach-header">
+              <span class="micro-label">Add Images</span>
+              <span class="drop-hint" id="imageDropHint">or drag &amp; drop / paste</span>
+            </div>
+            <div id="imageDropZone" class="image-drop-row">
+              <button type="button" class="btn btn-subtle btn-sm" id="btnAddImages">🖼️ Add Images…</button>
+              <label for="imageFileInput" class="visually-hidden">Upload screenshot or reference images</label>
+              <input type="file" id="imageFileInput" class="visually-hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+              <div id="attachedImagesList" class="image-thumb-list"></div>
+            </div>
+          </div>
         </div>
-        <div class="card approvals-container" id="approvalsList">
+
+        <!-- Right Box: Prompt Text Area -->
+        <div class="panel-card composer-prompt-card">
+          <div class="prompt-header">
+            <label for="taskDesc" class="micro-label">Prompt Text Area</label>
+            <div class="prompt-header-tools">
+              <label for="taskTitle" class="visually-hidden">Optional custom task title</label>
+              <input type="text" id="taskTitle" class="title-inline-input"
+                placeholder="Optional title (auto-generated from prompt)">
+              <button type="button" class="btn btn-ghost btn-sm" id="btnPasteCode">📋 Paste Code</button>
+            </div>
+          </div>
+
+          <textarea id="taskDesc" class="prompt-textarea" rows="4"
+            placeholder="Describe the task, paste code to inspect &amp; fix, or paste an image (Ctrl+Enter to run team)…"
+            required></textarea>
+
+          <div class="prompt-controls">
+            <div class="control-selectors">
+              <div class="control-field">
+                <label for="taskAgent" class="control-label">Worker</label>
+                <select id="taskAgent" class="select-input">
+                  <option value="">Auto (OpenCode)</option>
+                  <option value="OPENCODE">OpenCode Desktop CLI</option>
+                  <option value="ANTIGRAVITY">Google Antigravity CLI</option>
+                  <option value="CLAUDE_CODE">Claude Code CLI</option>
+                  <option value="QWEN_CODE">Qwen Code CLI</option>
+                </select>
+              </div>
+              <div class="control-field">
+                <label for="taskPolicy" class="control-label">Policy</label>
+                <select id="taskPolicy" class="select-input">
+                  <option value="AUTO_LOW_IMPACT">Auto Low Impact</option>
+                  <option value="ASK">Ask on High Risk</option>
+                  <option value="STRICT">Strict Approval</option>
+                  <option value="ALLOW_ALL">Allow All (Sandbox)</option>
+                </select>
+              </div>
+              <label class="check-label" for="useWorktree">
+                <input type="checkbox" id="useWorktree" checked>
+                <span>Worktree</span>
+              </label>
+            </div>
+
+            <div class="composer-actions">
+              <button type="button" class="btn btn-subtle" id="btnSingleRun">Single Run</button>
+              <button type="submit" class="btn btn-primary" id="btnSubmitTask">Run Team ⚡</button>
+            </div>
+          </div>
+
+          <div id="composerFeedback" class="inline-feedback" role="alert" hidden></div>
+        </div>
+      </form>
+    </section>
+
+    <!-- Active Task Bar + Stage Stepper -->
+    <section class="active-task-bar" aria-label="Active Task Controls">
+      <div class="active-task-left">
+        <label for="activeTaskSelect" class="micro-label">Active Task</label>
+        <select id="activeTaskSelect" class="select-input task-switcher">
+          <option value="">No tasks yet</option>
+        </select>
+        <span class="status-badge" id="activeTaskStatusBadge" hidden>IDLE</span>
+      </div>
+
+      <div id="stageStepper" class="stage-stepper" hidden></div>
+
+      <div class="active-task-actions" id="activeTaskActions"></div>
+    </section>
+
+    <!-- Row 3: Dual Fixed-Height Scrollable Agent Action Areas -->
+    <section id="liveActivityFeed" class="action-grid" aria-label="Live Agent Action Areas">
+      <article class="panel-card action-card" id="inspectorActionCard">
+        <header class="panel-header">
+          <div class="panel-title-group">
+            <h2 id="inspectorAreaTitle" class="panel-title">🟣 Antigravity Action Area</h2>
+            <span class="role-badge">Inspector / Reviewer</span>
+          </div>
+          <span class="status-pill" id="inspectorStatusPill">Idle</span>
+        </header>
+        <div id="inspectorActionStream" class="scroll-pane action-stream">
+          <div class="empty-state">Submit or select a task to watch live inspection &amp; verification events here.</div>
+        </div>
+      </article>
+
+      <article class="panel-card action-card" id="workerActionCard">
+        <header class="panel-header">
+          <div class="panel-title-group">
+            <h2 id="workerAreaTitle" class="panel-title">🟢 OpenCode Action Area</h2>
+            <span class="role-badge">Negotiator / Worker</span>
+          </div>
+          <span class="status-pill" id="workerStatusPill">Idle</span>
+        </header>
+        <div id="workerActionStream" class="scroll-pane action-stream">
+          <div class="empty-state">Submit or select a task to watch live negotiation &amp; code execution here.</div>
+        </div>
+      </article>
+    </section>
+
+    <!-- Row 4: Errors Area & Human Decisions Area -->
+    <section class="ops-grid" aria-label="Operations and Decisions">
+      <article class="panel-card ops-card" id="errorCenterSection">
+        <header class="panel-header">
+          <div class="panel-title-group">
+            <h2 class="panel-title">Errors Area</h2>
+            <span class="badge badge-success" id="errorCountBadge">0</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnClearErrors">Clear Resolved</button>
+        </header>
+        <div id="errorCenterList" class="scroll-pane ops-body">
+          <div class="empty-state">✓ All systems operational. No active errors.</div>
+        </div>
+      </article>
+
+      <article class="panel-card ops-card" id="decisionsSection">
+        <header class="panel-header">
+          <div class="panel-title-group">
+            <h2 class="panel-title">Human Decisions Area</h2>
+            <span class="badge badge-warning" id="approvalsBadge">0</span>
+          </div>
+          <span class="panel-hint">Approval gates &amp; operator instructions</span>
+        </header>
+        <div id="approvalsList" class="scroll-pane ops-body">
           <p class="empty-state">No actions currently require human approval.</p>
         </div>
-      </section>
-    </div>
-
-    <!-- Error Messages & Diagnostics Center -->
-    <section class="section" id="errorCenterSection">
-      <div class="section-header">
-        <h2>🚨 Error Messages & Diagnostics Center</h2>
-        <span class="badge" id="errorCountBadge">0 Active Errors</span>
-        <button class="btn btn-secondary btn-sm" id="btnClearErrors" onclick="clearAllErrors()" style="margin-left: auto;">Clear Resolved</button>
-      </div>
-      <div class="card error-center-card" id="errorCenterList">
-        <div class="empty-state">✓ All systems operational. No active errors or agent failures.</div>
-      </div>
-    </section>
-
-    <!-- Tasks Lifecycle Table -->
-    <section class="section">
-      <div class="section-header">
-        <h2>Task Execution History</h2>
-      </div>
-      <div class="card table-container">
-        <table class="tasks-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Title</th>
-              <th>Agent</th>
-              <th>Status</th>
-              <th>Worktree</th>
-              <th>Created</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="tasksTbody">
-            <tr>
-              <td colspan="7" class="empty-state">Loading tasks...</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Audit Log -->
-    <section class="section">
-      <div class="section-header">
-        <h2>Live Security & Operational Audit Log</h2>
-      </div>
-      <div class="card audit-card" id="auditLogContainer">
-        <div class="empty-state">No audit logs recorded yet.</div>
-      </div>
+      </article>
     </section>
   </main>
-
-  <!-- Output & Files Modal -->
-  <div class="modal-overlay" id="outputModal" style="display: none;">
-    <div class="modal-card">
-      <div class="modal-header">
-        <div class="modal-title-area">
-          <h3 id="modalTitle">Agent Execution Details</h3>
-          <div class="modal-tabs">
-            <button class="tab-btn active" id="tabChat" onclick="switchModalTab('chat')">💬 Team Negotiation & Logs</button>
-            <button class="tab-btn" id="tabFiles" onclick="switchModalTab('files')">📁 Files Worked On <span class="badge" id="modalFilesBadge">0</span></button>
-          </div>
-        </div>
-        <button class="btn btn-sm btn-secondary" id="btnCloseModal">✕</button>
-      </div>
-      <div class="modal-body">
-        <div id="modalMeta"></div>
-        
-        <!-- Tab 1: Live Activity Stream & Team Negotiation -->
-        <div id="tabChatView">
-          <div id="stageStepper" class="stage-stepper"></div>
-          <div id="liveActivityFeed" class="activity-feed"></div>
-          <div id="modalContent" class="negotiation-transcript"></div>
-        </div>
-
-        <!-- Tab 2: Changed Files & Diffs View -->
-        <div id="tabFilesView" style="display: none;">
-          <div id="filesContainer" class="files-container">
-            <div class="empty-state">Loading changed files...</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <footer class="footer">
     <p>AI Coding Command Center v1.0.0 &bull; Local PostgreSQL 18 &bull; Windows 11</p>
   </footer>
 
-  <script src="app.js?v=20261119d"></script>
+  <!-- Native Modal 1: File & Folder Explorer -->
+  <dialog id="fsExplorerDialog" class="app-dialog" closedby="any" aria-labelledby="fsExplorerTitle">
+    <header class="dialog-header">
+      <h2 id="fsExplorerTitle" class="dialog-title">📁 Select Target Folder</h2>
+      <div class="dialog-header-actions">
+        <button type="button" class="btn btn-subtle btn-sm" id="btnFsParent">⬆️ Parent</button>
+        <button type="button" class="btn btn-subtle btn-sm" id="btnFsRoot">🏠 Project Root</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnFsClose" aria-label="Close file explorer">✕</button>
+      </div>
+    </header>
+    <div class="dialog-body">
+      <div class="fs-path-bar">
+        <span class="fs-path-label" id="fsCurrentDirLabel">Loading…</span>
+        <span class="fs-drives-bar" id="fsDrivesBar"></span>
+      </div>
+      <form id="fsSearchForm" class="fs-search-row">
+        <label for="fsSearchInput" class="visually-hidden">Filter files and folders</label>
+        <input type="search" id="fsSearchInput" class="text-input text-input-sm" placeholder="Filter files &amp; folders…">
+        <button type="button" class="btn btn-approve btn-sm" id="btnUseCurrentFolder">✓ Use This Folder</button>
+        <button type="button" class="btn btn-approve btn-sm" id="btnFsDone" hidden>✓ Done</button>
+        <button type="button" class="btn btn-subtle btn-sm" id="btnFsClearSelected" hidden>Clear Selected</button>
+      </form>
+      <div id="fsEntriesList" class="scroll-pane fs-entries-list">
+        <div class="empty-state">Loading directory contents…</div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Native Modal 2: Files Worked On & Diffs -->
+  <dialog id="filesDialog" class="app-dialog app-dialog-wide" closedby="any" aria-labelledby="filesDialogTitle">
+    <header class="dialog-header">
+      <div class="dialog-title-group">
+        <h2 id="filesDialogTitle" class="dialog-title">📁 Files Worked On</h2>
+        <span class="badge" id="modalFilesBadge">0</span>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnCloseFilesDialog" aria-label="Close files worked on dialog">✕</button>
+    </header>
+    <div id="filesContainer" class="dialog-body scroll-pane files-container">
+      <div class="empty-state">Select a task to view changed files and tool activity.</div>
+    </div>
+  </dialog>
+
+  <!-- Native Modal 3: Task Execution History & Live Audit Log -->
+  <dialog id="historyDialog" class="app-dialog app-dialog-wide" closedby="any" aria-labelledby="historyDialogTitle">
+    <header class="dialog-header">
+      <div class="dialog-title-group">
+        <h2 id="historyDialogTitle" class="dialog-title">Task History &amp; Audit Log</h2>
+        <div class="segmented-tabs" role="tablist" aria-label="History views">
+          <button type="button" class="tab-btn active" id="tabHistoryTasks" role="tab" aria-selected="true" aria-controls="historyTasksPanel">Tasks</button>
+          <button type="button" class="tab-btn" id="tabHistoryAudit" role="tab" aria-selected="false" aria-controls="historyAuditPanel">Audit Log</button>
+        </div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnCloseHistoryDialog" aria-label="Close task history dialog">✕</button>
+    </header>
+    <div class="dialog-body scroll-pane">
+      <div id="historyTasksPanel" role="tabpanel" aria-labelledby="tabHistoryTasks">
+        <div class="table-container">
+          <table class="tasks-table">
+            <caption class="visually-hidden">Recent task executions</caption>
+            <thead>
+              <tr>
+                <th scope="col">Task</th>
+                <th scope="col">Team / Agent</th>
+                <th scope="col">Status</th>
+                <th scope="col">Worktree</th>
+                <th scope="col">Created</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tasksTbody">
+              <tr>
+                <td colspan="6" class="empty-state">Loading tasks…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div id="historyAuditPanel" role="tabpanel" aria-labelledby="tabHistoryAudit" hidden>
+        <div id="auditLogContainer" class="audit-card">
+          <div class="empty-state">No audit logs recorded yet.</div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="app.js?v=20261119f"></script>
 </body>
 </html>

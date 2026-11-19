@@ -1,16 +1,19 @@
 /**
- * AI Coding Command Center Operator UI Logic
+ * AI Coding Command Center Operator UI
+ * Clean single-screen cockpit with dual live agent streams, image attachments,
+ * native modal dialogs, and IME-safe keyboard handling.
  */
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "";
+
 const AGENT_META = {
-  ANTIGRAVITY: { short: "Antigravity", full: "Google Antigravity", icon: "🟣", pillClass: "agent-pill-ANTIGRAVITY", bubbleClass: "msg-antigravity" },
-  OPENCODE: { short: "OpenCode", full: "OpenCode Desktop", icon: "🟢", pillClass: "agent-pill-OPENCODE", bubbleClass: "msg-opencode" },
-  CLAUDE_CODE: { short: "Claude Code", full: "Claude Code CLI", icon: "🟠", pillClass: "agent-pill-CLAUDE_CODE", bubbleClass: "msg-claude" },
-  QWEN_CODE: { short: "Qwen Code", full: "Qwen Code CLI", icon: "🔵", pillClass: "agent-pill-QWEN_CODE", bubbleClass: "msg-qwen" },
-  CODEX: { short: "Codex", full: "OpenAI Codex", icon: "⚪", pillClass: "agent-pill-OTHER", bubbleClass: "msg-opencode" },
-  OPENCLAW: { short: "OpenClaw", full: "OpenClaw", icon: "🦅", pillClass: "agent-pill-OTHER", bubbleClass: "msg-opencode" },
-  SYSTEM: { short: "System", full: "Command Center", icon: "⚖️", pillClass: "agent-pill-OTHER", bubbleClass: "msg-opencode" },
+  ANTIGRAVITY: { short: "Antigravity", full: "Google Antigravity CLI", icon: "🟣", pillClass: "agent-pill-ANTIGRAVITY" },
+  OPENCODE: { short: "OpenCode", full: "OpenCode Desktop CLI", icon: "🟢", pillClass: "agent-pill-OPENCODE" },
+  CLAUDE_CODE: { short: "Claude Code", full: "Claude Code CLI", icon: "🟠", pillClass: "agent-pill-CLAUDE_CODE" },
+  QWEN_CODE: { short: "Qwen Code", full: "Qwen Code CLI", icon: "🔵", pillClass: "agent-pill-QWEN_CODE" },
+  CODEX: { short: "Codex", full: "OpenAI Codex", icon: "⚪", pillClass: "agent-pill-OTHER" },
+  OPENCLAW: { short: "OpenClaw", full: "OpenClaw", icon: "🦅", pillClass: "agent-pill-OTHER" },
+  SYSTEM: { short: "System", full: "Command Center", icon: "⚖️", pillClass: "agent-pill-OTHER" },
 };
 
 function getAgentMeta(agentKey) {
@@ -19,24 +22,32 @@ function getAgentMeta(agentKey) {
     full: agentKey || "Agent",
     icon: "🤖",
     pillClass: "agent-pill-OTHER",
-    bubbleClass: "msg-opencode",
   };
 }
 
-let activeModalTaskId = null;
-let lastRenderedTaskId = null;
-let currentModalTab = "chat";
-let modalPollTimer = null;
+// Application state
+let cachedTasks = [];
+let detectedAgents = [];
+let activeTaskId = null;
+let lastLoadedActiveTaskId = null;
 const eventFingerprints = new Map();
-let lastFilesFingerprint = null;
-let lastModalContentFingerprint = null;
+let lastInspectorSupplementFp = "";
+let lastWorkerSupplementFp = "";
+let lastActiveActionsFp = "";
 let lastApprovalsFingerprint = null;
+let lastErrorsFingerprint = null;
+let lastFilesFingerprint = null;
 let pendingDecisionInFlight = false;
+
+// Composer scope & image attachments
 let scopeMode = "folder";
 let selectedContextFiles = [];
+let attachedImages = [];
 let workspaceRootPath = "";
 let repoRootPath = "";
 let selectedFolderRoot = "";
+
+// File explorer state
 let explorerOpen = false;
 let explorerMode = "folder";
 let explorerCurrentDir = "";
@@ -46,10 +57,79 @@ let currentExplorerFolders = [];
 let currentExplorerFiles = [];
 
 document.addEventListener("DOMContentLoaded", () => {
-  initDashboard();
+  installDialogLightDismissFallback();
   setupEventListeners();
-  setInterval(refreshData, 2000);
+  initDashboard();
+  setInterval(refreshAll, 2000);
+  setInterval(() => {
+    if (activeTaskId) refreshActiveTaskWorkspace();
+  }, 1500);
 });
+
+function announceStatus(message) {
+  const el = document.getElementById("statusAnnouncer");
+  if (!el || !message) return;
+  el.textContent = "";
+  window.requestAnimationFrame(() => {
+    el.textContent = message;
+  });
+}
+
+function showComposerFeedback(message) {
+  const el = document.getElementById("composerFeedback");
+  if (!el) return;
+  if (!message) {
+    el.textContent = "";
+    el.hidden = true;
+    return;
+  }
+  el.textContent = message;
+  el.hidden = false;
+}
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function isImeComposing(event) {
+  return Boolean(event && (event.isComposing || event.keyCode === 229));
+}
+
+function installDialogLightDismissFallback() {
+  if ("closedBy" in HTMLDialogElement.prototype) return;
+  const outside = (e, dialog) => {
+    const r = dialog.getBoundingClientRect();
+    return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+  };
+  for (const dialog of document.querySelectorAll('dialog[closedby="any"]')) {
+    let pressedOutside = false;
+    dialog.addEventListener("pointerdown", (e) => {
+      pressedOutside = outside(e, dialog);
+    });
+    dialog.addEventListener("pointerup", (e) => {
+      if (pressedOutside && outside(e, dialog)) dialog.close();
+      pressedOutside = false;
+    });
+  }
+}
+
+function openDialogModal(dialogId) {
+  const dlg = document.getElementById(dialogId);
+  if (dlg && !dlg.open) dlg.showModal();
+}
+
+function closeDialogModal(dialogId) {
+  const dlg = document.getElementById(dialogId);
+  if (dlg && dlg.open) dlg.close();
+}
+
+/* ---------- Prompt Title & Code Helpers ---------- */
 
 function startsWithCode(text) {
   const lines = (text || "").split(/\r?\n/);
@@ -118,6 +198,34 @@ function deriveTitleFromPrompt(desc) {
   return (idx > 0 ? sub.slice(0, idx) : sub).replace(/[,;:\-]+$/, "") + "…";
 }
 
+async function pasteOrWrapCodeSnippet() {
+  const descEl = document.getElementById("taskDesc");
+  if (!descEl) return;
+  let clip = "";
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    try { clip = await navigator.clipboard.readText(); } catch { clip = ""; }
+  }
+  const start = descEl.selectionStart || 0;
+  const end = descEl.selectionEnd || 0;
+  const selected = descEl.value.slice(start, end);
+  if (selected.trim()) {
+    const block = selected.includes("```") ? selected : `\`\`\`\n${selected.trim()}\n\`\`\``;
+    descEl.value = descEl.value.slice(0, start) + block + descEl.value.slice(end);
+  } else if (clip && clip.trim()) {
+    const block = clip.includes("```") ? clip.trim() : `\`\`\`\n${clip.trim()}\n\`\`\``;
+    const prefix = descEl.value && !descEl.value.endsWith("\n") ? "\n" : "";
+    descEl.value = descEl.value + prefix + block + "\n";
+  } else if (descEl.value.trim() && !descEl.value.includes("```")) {
+    descEl.value = `\`\`\`\n${descEl.value.trim()}\n\`\`\`\n`;
+  } else {
+    descEl.value = descEl.value + "```\n# Paste code to inspect or fix\n```\n";
+  }
+  descEl.dispatchEvent(new Event("input"));
+  descEl.focus();
+}
+
+/* ---------- Scope & File Explorer ---------- */
+
 function setScopeMode(mode) {
   const prevMode = scopeMode;
   scopeMode = mode === "files" ? "files" : "folder";
@@ -127,20 +235,21 @@ function setScopeMode(mode) {
   const pathInput = document.getElementById("projectPath");
   if (btnF) btnF.classList.toggle("active", scopeMode === "folder");
   if (btnS) btnS.classList.toggle("active", scopeMode === "files");
-  if (btnAdd) btnAdd.style.display = scopeMode === "files" ? "inline-flex" : "none";
+  if (btnAdd) btnAdd.hidden = scopeMode !== "files";
+
   if (scopeMode === "folder") {
     selectedContextFiles = [];
     if (prevMode === "files" && pathInput && !pathInput.value.trim() && selectedFolderRoot) {
       pathInput.value = selectedFolderRoot;
     }
-    if (pathInput) pathInput.placeholder = workspaceRootPath || "C:\\Users\\ahmed\\AI-Coding-Command-Center (entire folder)";
+    if (pathInput) pathInput.placeholder = workspaceRootPath || "Target folder path…";
   } else if (pathInput) {
     const curVal = pathInput.value.trim();
     if (prevMode === "folder" && curVal && (curVal === workspaceRootPath || curVal === selectedFolderRoot)) {
       selectedFolderRoot = curVal;
       pathInput.value = "";
     }
-    pathInput.placeholder = "Type or pick a relative file/subfolder (e.g. services/orchestrator/api.py)";
+    pathInput.placeholder = "Type or pick relative file/subfolder…";
   }
   renderScopeChips();
 }
@@ -166,13 +275,16 @@ function addTargetFileOrSubfolder(rawPath) {
   if (!selectedContextFiles.includes(val)) {
     selectedContextFiles.push(val);
     renderScopeChips();
+    announceStatus(`Added target ${val}`);
   }
 }
 
 function removeTargetFile(idx) {
+  const removed = selectedContextFiles[idx];
   selectedContextFiles.splice(idx, 1);
   renderScopeChips();
   if (explorerOpen) renderExplorerRows();
+  if (removed) announceStatus(`Removed target ${removed}`);
 }
 
 function renderScopeChips() {
@@ -180,15 +292,21 @@ function renderScopeChips() {
   if (!container) return;
   if (scopeMode === "folder" || selectedContextFiles.length === 0) {
     const raw = (document.getElementById("projectPath")?.value || "").trim();
-    const label = raw || selectedFolderRoot || workspaceRootPath || "Default Project Folder (All files)";
+    const label = raw || selectedFolderRoot || workspaceRootPath || "Default Project Root";
     container.innerHTML = scopeMode === "folder"
-      ? `<span class="file-chip file-chip-folder">📁 Entire Folder: ${escapeHtml(label)}</span>`
-      : `<span class="file-chip">No specific file selected yet — choose files or subfolders in the browser above</span>`;
+      ? `<span class="file-chip file-chip-folder">📁 ${escapeHtml(label)}</span>`
+      : `<span class="file-chip">No specific files chosen yet — click Files… to select</span>`;
     return;
   }
   container.innerHTML = selectedContextFiles.map((f, idx) => `
-    <span class="file-chip">📄 ${escapeHtml(f)} <button type="button" class="file-chip-remove" onclick="removeTargetFile(${idx})" title="Remove target">✕</button></span>
+    <span class="file-chip">
+      📄 ${escapeHtml(f)}
+      <button type="button" class="file-chip-remove" data-remove-file="${idx}" aria-label="Remove target file ${escapeHtml(f)}">✕</button>
+    </span>
   `).join("");
+  container.querySelectorAll("[data-remove-file]").forEach((btn) => {
+    btn.addEventListener("click", () => removeTargetFile(Number(btn.dataset.removeFile)));
+  });
 }
 
 async function loadWorkspacePaths(rootPath = null) {
@@ -203,48 +321,18 @@ async function loadWorkspacePaths(rootPath = null) {
     workspaceRootPath = data.root || workspaceRootPath;
     if (!selectedFolderRoot) selectedFolderRoot = workspaceRootPath;
     list.innerHTML = (data.entries || []).map((e) => (
-      `<option value="${escapeHtml(e.path)}">${e.type === "folder" ? "📁 Folder" : "📄 File"}</option>`
+      `<option value="${escapeHtml(e.path)}">${e.type === "folder" ? "Folder" : "File"}</option>`
     )).join("");
     renderScopeChips();
-  } catch (err) {
-    // Non-fatal if listing fails
+  } catch {
+    // Non-fatal
   }
 }
 
 function getInitialBrowseDir(mode) {
-  const pathInput = document.getElementById("projectPath");
-  const typed = (pathInput?.value || "").trim();
+  const typed = (document.getElementById("projectPath")?.value || "").trim();
   if (mode === "folder" && typed) return typed;
   return explorerCurrentDir || selectedFolderRoot || workspaceRootPath || repoRootPath || "";
-}
-
-function handleScopeFolderClick() {
-  setScopeMode("folder");
-  openFsExplorer("folder", getInitialBrowseDir("folder"));
-}
-
-function handleScopeFilesClick() {
-  setScopeMode("files");
-  openFsExplorer("files", getInitialBrowseDir("files"));
-}
-
-function handleBrowseFolderClick() {
-  setScopeMode("folder");
-  openFsExplorer("folder", getInitialBrowseDir("folder"));
-}
-
-function handleBrowseFileClick() {
-  setScopeMode("files");
-  openFsExplorer("files", getInitialBrowseDir("files"));
-}
-
-function handleAddTargetClick() {
-  const pathInput = document.getElementById("projectPath");
-  if (pathInput && pathInput.value.trim()) {
-    addTargetFileOrSubfolder(pathInput.value);
-    pathInput.value = "";
-    if (explorerOpen) renderExplorerRows();
-  }
 }
 
 function updateExplorerModeUI() {
@@ -254,29 +342,30 @@ function updateExplorerModeUI() {
   const clearBtn = document.getElementById("btnFsClearSelected");
   if (titleEl) {
     titleEl.textContent = explorerMode === "folder"
-      ? "📁 Select Target Folder (click a folder to open, or ✓ Select Folder)"
+      ? "📁 Select Target Folder"
       : "📄 Select Specific File(s) or Subfolder(s)";
   }
-  if (useDirBtn) useDirBtn.style.display = explorerMode === "folder" ? "inline-flex" : "none";
-  if (doneBtn) doneBtn.style.display = explorerMode === "files" ? "inline-flex" : "none";
-  if (clearBtn) clearBtn.style.display = explorerMode === "files" ? "inline-flex" : "none";
+  if (useDirBtn) useDirBtn.hidden = explorerMode !== "folder";
+  if (doneBtn) doneBtn.hidden = explorerMode !== "files";
+  if (clearBtn) clearBtn.hidden = explorerMode !== "files";
 }
 
 async function openFsExplorer(mode, dirPath = "") {
   explorerMode = mode === "files" ? "files" : "folder";
   explorerOpen = true;
-  const panel = document.getElementById("fsExplorerPanel");
+  openDialogModal("fsExplorerDialog");
   const searchInput = document.getElementById("fsSearchInput");
-  if (panel) panel.style.display = "flex";
-  if (searchInput) searchInput.value = "";
+  if (searchInput) {
+    searchInput.value = "";
+    searchInput.focus();
+  }
   updateExplorerModeUI();
   await browseFsDirectory(dirPath || explorerCurrentDir || selectedFolderRoot || workspaceRootPath || "", "");
 }
 
 function closeFsExplorer() {
   explorerOpen = false;
-  const panel = document.getElementById("fsExplorerPanel");
-  if (panel) panel.style.display = "none";
+  closeDialogModal("fsExplorerDialog");
 }
 
 function browseParentDir() {
@@ -308,6 +397,7 @@ async function selectEntireFolder(folderPath) {
   if (pathInput) pathInput.value = folderPath;
   renderScopeChips();
   await loadWorkspacePaths(folderPath);
+  announceStatus(`Target folder set to ${folderPath}`);
 }
 
 async function useCurrentExplorerFolder() {
@@ -321,11 +411,8 @@ function toggleTargetSelection(targetPath) {
   if (!rel) return;
   if (scopeMode !== "files") setScopeMode("files");
   const idx = selectedContextFiles.indexOf(rel);
-  if (idx >= 0) {
-    selectedContextFiles.splice(idx, 1);
-  } else {
-    selectedContextFiles.push(rel);
-  }
+  if (idx >= 0) selectedContextFiles.splice(idx, 1);
+  else selectedContextFiles.push(rel);
   renderScopeChips();
   renderExplorerRows();
 }
@@ -357,7 +444,7 @@ async function browseFsDirectory(dirPath = "", query = "") {
   const parentBtn = document.getElementById("btnFsParent");
   if (!listEl) return;
 
-  listEl.innerHTML = `<div class="empty-state" style="padding:0.85rem;">Loading directory…</div>`;
+  listEl.innerHTML = `<div class="empty-state">Loading directory…</div>`;
   try {
     const params = new URLSearchParams();
     if (dirPath) params.set("path", dirPath);
@@ -380,21 +467,22 @@ async function browseFsDirectory(dirPath = "", query = "") {
     if (pathLabel) {
       pathLabel.textContent = explorerCurrentDir + (data.query ? `  (search: "${data.query}")` : "");
     }
-    if (parentBtn) {
-      parentBtn.disabled = !explorerParentDir;
-      parentBtn.style.opacity = explorerParentDir ? "1" : "0.45";
-    }
+    if (parentBtn) parentBtn.disabled = !explorerParentDir;
     if (drivesBar) {
       const drives = data.drives || [];
       drivesBar.innerHTML = drives.map((drv, idx) => (
-        `<button type="button" class="fs-drive-btn" onclick="onFsDriveSelect(${idx})" title="Browse drive ${escapeHtml(drv)}">${escapeHtml(drv)}</button>`
+        `<button type="button" class="fs-drive-btn" data-drive-idx="${idx}" aria-label="Open drive ${escapeHtml(drv)}">${escapeHtml(drv)}</button>`
       )).join("");
-      drivesBar.dataset.drives = JSON.stringify(drives);
+      drivesBar.querySelectorAll("[data-drive-idx]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const drv = drives[Number(btn.dataset.driveIdx)];
+          if (drv) browseFsDirectory(drv, "");
+        });
+      });
     }
-
     renderExplorerRows();
   } catch (err) {
-    listEl.innerHTML = `<div class="empty-state" style="padding:0.85rem; color:#f85149;">Unable to list directory: ${escapeHtml(err.message)}</div>`;
+    listEl.innerHTML = `<div class="empty-state" role="alert">Unable to list directory: ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -402,131 +490,273 @@ function renderExplorerRows() {
   const listEl = document.getElementById("fsEntriesList");
   if (!listEl) return;
   if (currentExplorerFolders.length === 0 && currentExplorerFiles.length === 0) {
-    listEl.innerHTML = `<div class="empty-state" style="padding:0.85rem;">No matching folders or files in this directory.</div>`;
+    listEl.innerHTML = `<div class="empty-state">No matching folders or files in this directory.</div>`;
     return;
   }
 
+  const hasQuery = Boolean(document.getElementById("fsSearchInput")?.value.trim());
   let html = "";
+
   currentExplorerFolders.forEach((folder, idx) => {
     const isSel = explorerMode === "files" && isTargetSelected(folder);
-    const displayName = (document.getElementById("fsSearchInput")?.value.trim() ? folder.rel_path : folder.name) + "/";
-    const btnLabel = explorerMode === "folder"
-      ? "✓ Select Folder"
-      : (isSel ? "✓ Selected" : "+ Select Subfolder");
+    const displayName = (hasQuery ? folder.rel_path : folder.name) + "/";
+    const btnLabel = explorerMode === "folder" ? "✓ Select Folder" : (isSel ? "✓ Selected" : "+ Subfolder");
     html += `
       <div class="fs-entry-row ${isSel ? "selected" : ""}">
-        <button type="button" class="fs-entry-main" onclick="onFsFolderOpen(${idx})" title="Open ${escapeHtml(folder.path)}">
+        <button type="button" class="fs-entry-main" data-folder-open="${idx}" aria-label="Open folder ${escapeHtml(folder.path)}">
           📁 <span>${escapeHtml(displayName)}</span>
         </button>
-        <button type="button" class="fs-entry-action ${isSel ? "selected" : ""}" onclick="onFsFolderSelect(${idx})">${btnLabel}</button>
+        <button type="button" class="btn btn-sm ${isSel ? "btn-approve" : "btn-subtle"}" data-folder-select="${idx}" aria-label="${escapeHtml(btnLabel)} ${escapeHtml(folder.name)}">${btnLabel}</button>
       </div>
     `;
   });
 
   currentExplorerFiles.forEach((file, idx) => {
     const isSel = explorerMode === "files" && isTargetSelected(file);
-    const displayName = document.getElementById("fsSearchInput")?.value.trim() ? file.rel_path : file.name;
+    const displayName = hasQuery ? file.rel_path : file.name;
     const sizeText = formatEntrySize(file.size);
-    const btnLabel = isSel ? "✓ Selected" : "+ Select File";
+    const btnLabel = isSel ? "✓ Selected" : "+ File";
     html += `
       <div class="fs-entry-row ${isSel ? "selected" : ""}">
-        <button type="button" class="fs-entry-main" onclick="onFsFileSelect(${idx})" title="Select ${escapeHtml(file.path)}">
+        <button type="button" class="fs-entry-main" data-file-select="${idx}" aria-label="Select file ${escapeHtml(file.path)}">
           📄 <span>${escapeHtml(displayName)}</span>
         </button>
         ${sizeText ? `<span class="fs-entry-meta">${sizeText}</span>` : ""}
-        <button type="button" class="fs-entry-action ${isSel ? "selected" : ""}" onclick="onFsFileSelect(${idx})">${btnLabel}</button>
+        <button type="button" class="btn btn-sm ${isSel ? "btn-approve" : "btn-subtle"}" data-file-select-btn="${idx}" aria-label="${escapeHtml(btnLabel)} ${escapeHtml(file.name)}">${btnLabel}</button>
       </div>
     `;
   });
 
   listEl.innerHTML = html;
+
+  listEl.querySelectorAll("[data-folder-open]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const folder = currentExplorerFolders[Number(btn.dataset.folderOpen)];
+      if (!folder) return;
+      const searchInput = document.getElementById("fsSearchInput");
+      if (searchInput) searchInput.value = "";
+      browseFsDirectory(folder.path, "");
+    });
+  });
+
+  listEl.querySelectorAll("[data-folder-select]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const folder = currentExplorerFolders[Number(btn.dataset.folderSelect)];
+      if (!folder) return;
+      if (explorerMode === "folder") {
+        await selectEntireFolder(folder.path);
+        closeFsExplorer();
+      } else {
+        toggleTargetSelection(folder.rel_path || folder.path);
+      }
+    });
+  });
+
+  const handlePickFile = (idx) => {
+    const file = currentExplorerFiles[idx];
+    if (!file) return;
+    if (explorerMode !== "files") {
+      explorerMode = "files";
+      setScopeMode("files");
+      updateExplorerModeUI();
+    }
+    toggleTargetSelection(file.rel_path || file.path);
+  };
+  listEl.querySelectorAll("[data-file-select]").forEach((btn) => {
+    btn.addEventListener("click", () => handlePickFile(Number(btn.dataset.fileSelect)));
+  });
+  listEl.querySelectorAll("[data-file-select-btn]").forEach((btn) => {
+    btn.addEventListener("click", () => handlePickFile(Number(btn.dataset.fileSelectBtn)));
+  });
 }
 
-function onFsDriveSelect(idx) {
-  const drivesBar = document.getElementById("fsDrivesBar");
-  const drives = drivesBar && drivesBar.dataset.drives ? JSON.parse(drivesBar.dataset.drives) : [];
-  if (drives[idx]) browseFsDirectory(drives[idx], "");
+/* ---------- Image Upload & Preview ("Add Images") ---------- */
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read image file"));
+    reader.readAsDataURL(file);
+  });
 }
 
-function onFsFolderOpen(idx) {
-  const folder = currentExplorerFolders[idx];
-  if (!folder) return;
-  const searchInput = document.getElementById("fsSearchInput");
-  if (searchInput) searchInput.value = "";
-  browseFsDirectory(folder.path, "");
-}
+async function uploadImageFiles(fileList) {
+  const files = Array.from(fileList || []).filter((f) => f && f.type && f.type.startsWith("image/"));
+  if (files.length === 0) return;
 
-async function onFsFolderSelect(idx) {
-  const folder = currentExplorerFolders[idx];
-  if (!folder) return;
-  if (explorerMode === "folder") {
-    await selectEntireFolder(folder.path);
-    closeFsExplorer();
-  } else {
-    toggleTargetSelection(folder.rel_path || folder.path);
+  showComposerFeedback("");
+  const dropHint = document.getElementById("imageDropHint");
+  if (dropHint) dropHint.textContent = "Uploading image…";
+
+  for (const file of files) {
+    if (file.size > 10 * 1024 * 1024) {
+      showComposerFeedback(`Image "${file.name}" exceeds the 10 MB upload limit.`);
+      continue;
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const res = await fetch(`${API_BASE}/uploads/image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name || "pasted-screenshot.png",
+          data_url: dataUrl,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Upload failed (${res.status})`);
+      }
+      const saved = await res.json();
+      attachedImages.push(saved);
+      renderAttachedImages();
+      announceStatus(`Attached image ${saved.original_name}`);
+    } catch (err) {
+      showComposerFeedback(`Image upload failed: ${err.message}`);
+    }
   }
+
+  if (dropHint) dropHint.textContent = "or drag & drop / paste";
 }
 
-function onFsFileSelect(idx) {
-  const file = currentExplorerFiles[idx];
-  if (!file) return;
-  if (explorerMode !== "files") {
-    explorerMode = "files";
-    setScopeMode("files");
-    updateExplorerModeUI();
+function renderAttachedImages() {
+  const container = document.getElementById("attachedImagesList");
+  if (!container) return;
+  if (attachedImages.length === 0) {
+    container.innerHTML = "";
+    return;
   }
-  toggleTargetSelection(file.rel_path || file.path);
+  container.innerHTML = attachedImages.map((img, idx) => `
+    <div class="image-thumb-item">
+      <img src="${escapeHtml(img.url)}" alt="Attached reference ${escapeHtml(img.original_name)}" width="38" height="38">
+      <span class="image-thumb-name" title="${escapeHtml(img.original_name)}">${escapeHtml(img.original_name)}</span>
+      <button type="button" class="file-chip-remove" data-remove-img="${idx}" aria-label="Remove image ${escapeHtml(img.original_name)}">✕</button>
+    </div>
+  `).join("");
+  container.querySelectorAll("[data-remove-img]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.removeImg);
+      const removed = attachedImages[idx];
+      attachedImages.splice(idx, 1);
+      renderAttachedImages();
+      if (removed) announceStatus(`Removed image ${removed.original_name}`);
+    });
+  });
 }
 
-async function pasteOrWrapCodeSnippet() {
-  const descEl = document.getElementById("taskDesc");
-  if (!descEl) return;
-  let clip = "";
-  if (navigator.clipboard && navigator.clipboard.readText) {
-    try { clip = await navigator.clipboard.readText(); } catch (_) { clip = ""; }
-  }
-  const start = descEl.selectionStart || 0;
-  const end = descEl.selectionEnd || 0;
-  const selected = descEl.value.slice(start, end);
-  let block = "";
-  if (selected.trim()) {
-    block = selected.includes("```") ? selected : `\`\`\`\n${selected.trim()}\n\`\`\``;
-    descEl.value = descEl.value.slice(0, start) + block + descEl.value.slice(end);
-  } else if (clip && clip.trim()) {
-    block = clip.includes("```") ? clip.trim() : `\`\`\`\n${clip.trim()}\n\`\`\``;
-    const prefix = descEl.value && !descEl.value.endsWith("\n") ? "\n" : "";
-    descEl.value = descEl.value + prefix + block + "\n";
-  } else if (descEl.value.trim() && !descEl.value.includes("```")) {
-    descEl.value = `\`\`\`\n${descEl.value.trim()}\n\`\`\`\n`;
-  } else {
-    const tpl = "```\n# Paste your code to fix here\n```\n";
-    descEl.value = descEl.value + tpl;
-  }
-  descEl.dispatchEvent(new Event("input"));
-  descEl.focus();
-}
+/* ---------- Event Wiring ---------- */
 
 function setupEventListeners() {
-  document.getElementById("btnRefresh").addEventListener("click", refreshData);
-  document.getElementById("taskForm").addEventListener("submit", handleTaskSubmit);
+  document.getElementById("btnRefresh")?.addEventListener("click", () => {
+    refreshAll();
+    announceStatus("Dashboard refreshed");
+  });
 
+  document.getElementById("btnScopeFolder")?.addEventListener("click", () => {
+    setScopeMode("folder");
+    openFsExplorer("folder", getInitialBrowseDir("folder"));
+  });
+  document.getElementById("btnScopeFiles")?.addEventListener("click", () => {
+    setScopeMode("files");
+    openFsExplorer("files", getInitialBrowseDir("files"));
+  });
+  document.getElementById("btnAddTarget")?.addEventListener("click", () => {
+    const pathInput = document.getElementById("projectPath");
+    if (pathInput && pathInput.value.trim()) {
+      addTargetFileOrSubfolder(pathInput.value);
+      pathInput.value = "";
+      if (explorerOpen) renderExplorerRows();
+    }
+  });
+
+  // File explorer modal controls
+  document.getElementById("btnFsParent")?.addEventListener("click", browseParentDir);
+  document.getElementById("btnFsRoot")?.addEventListener("click", browseProjectRoot);
+  document.getElementById("btnFsClose")?.addEventListener("click", closeFsExplorer);
+  document.getElementById("btnUseCurrentFolder")?.addEventListener("click", useCurrentExplorerFolder);
+  document.getElementById("btnFsDone")?.addEventListener("click", closeFsExplorer);
+  document.getElementById("btnFsClearSelected")?.addEventListener("click", clearSelectedTargets);
+  document.getElementById("fsExplorerDialog")?.addEventListener("close", () => {
+    explorerOpen = false;
+  });
+
+  const fsSearchInput = document.getElementById("fsSearchInput");
+  fsSearchInput?.addEventListener("input", (e) => handleFsSearchInput(e.target.value));
+  document.getElementById("fsSearchForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    browseFsDirectory(explorerCurrentDir, fsSearchInput?.value || "");
+  });
+  fsSearchInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (isImeComposing(e)) return;
+      browseFsDirectory(explorerCurrentDir, e.target.value || "");
+    }
+  });
+
+  // Add Images (button picker, drag-drop, and clipboard screenshot paste)
+  const imageInput = document.getElementById("imageFileInput");
+  document.getElementById("btnAddImages")?.addEventListener("click", () => imageInput?.click());
+  imageInput?.addEventListener("change", async (e) => {
+    await uploadImageFiles(e.target.files);
+    e.target.value = "";
+  });
+
+  const dropZone = document.getElementById("imageDropZone");
+  if (dropZone) {
+    dropZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropZone.classList.add("drag-over");
+    });
+    dropZone.addEventListener("dragleave", () => {
+      dropZone.classList.remove("drag-over");
+    });
+    dropZone.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      dropZone.classList.remove("drag-over");
+      if (e.dataTransfer?.files?.length) {
+        await uploadImageFiles(e.dataTransfer.files);
+      }
+    });
+  }
+
+  // Prompt editing, code wrapping, image paste & IME-safe shortcuts
   const descEl = document.getElementById("taskDesc");
   const titleEl = document.getElementById("taskTitle");
   if (descEl && titleEl) {
     descEl.addEventListener("input", () => {
+      showComposerFeedback("");
       if (!titleEl.value.trim()) {
         const autoTitle = deriveTitleFromPrompt(descEl.value);
         titleEl.placeholder = autoTitle
           ? `Auto-title: ${autoTitle}`
-          : "Auto-generated from your prompt below (or type a custom title)";
+          : "Optional title (auto-generated from prompt)";
       }
     });
     descEl.addEventListener("keydown", (e) => {
       if (e.key === "Tab") {
         e.preventDefault();
-        const s = descEl.selectionStart, end = descEl.selectionEnd;
+        const s = descEl.selectionStart;
+        const end = descEl.selectionEnd;
         descEl.value = descEl.value.slice(0, s) + "    " + descEl.value.slice(end);
         descEl.selectionStart = descEl.selectionEnd = s + 4;
+      } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (isImeComposing(e)) return;
+        document.getElementById("taskForm")?.requestSubmit();
+      }
+    });
+    descEl.addEventListener("paste", async (e) => {
+      const items = Array.from(e.clipboardData?.items || []);
+      const imgFiles = items
+        .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+        .map((it) => it.getAsFile())
+        .filter(Boolean);
+      if (imgFiles.length > 0) {
+        const hasText = Boolean(e.clipboardData?.getData("text/plain"));
+        if (!hasText) e.preventDefault();
+        await uploadImageFiles(imgFiles);
       }
     });
   }
@@ -540,27 +770,77 @@ function setupEventListeners() {
   pathInput?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && scopeMode === "files") {
       e.preventDefault();
-      handleAddTargetClick();
+      if (isImeComposing(e)) return;
+      document.getElementById("btnAddTarget")?.click();
     }
   });
 
-  document.getElementById("fsSearchInput")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      browseFsDirectory(explorerCurrentDir, e.target.value || "");
+  // Agent selector sync with top bar chips & right pane preview
+  document.getElementById("taskAgent")?.addEventListener("change", () => {
+    syncAgentChipPressedState();
+    syncDualPanePreviewHeaders();
+  });
+
+  // Task submission (Run Team = default submit, Single Run = button click)
+  document.getElementById("taskForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitAndRunTask("collaborate");
+  });
+  document.getElementById("btnSingleRun")?.addEventListener("click", () => {
+    submitAndRunTask("execute");
+  });
+
+  // Active task selector
+  document.getElementById("activeTaskSelect")?.addEventListener("change", (e) => {
+    const nextId = e.target.value || null;
+    if (nextId && nextId !== activeTaskId) {
+      focusTaskInWorkspace(nextId);
     }
   });
 
-  const btnClose = document.getElementById("btnCloseModal");
-  if (btnClose) btnClose.addEventListener("click", closeModal);
+  // Header secondary dialogs (History, Files, Audit)
+  document.getElementById("btnOpenFiles")?.addEventListener("click", () => {
+    if (activeTaskId) loadTaskFiles(activeTaskId);
+    openDialogModal("filesDialog");
+  });
+  document.getElementById("btnCloseFilesDialog")?.addEventListener("click", () => closeDialogModal("filesDialog"));
 
-  const modal = document.getElementById("outputModal");
-  if (modal) {
-    modal.addEventListener("click", (e) => {
-      if (e.target.id === "outputModal") closeModal();
-    });
-  }
+  document.getElementById("btnOpenHistory")?.addEventListener("click", () => {
+    switchHistoryTab("tasks");
+    openDialogModal("historyDialog");
+  });
+  document.getElementById("btnOpenAudit")?.addEventListener("click", () => {
+    switchHistoryTab("audit");
+    openDialogModal("historyDialog");
+  });
+  document.getElementById("btnCloseHistoryDialog")?.addEventListener("click", () => closeDialogModal("historyDialog"));
+  document.getElementById("tabHistoryTasks")?.addEventListener("click", () => switchHistoryTab("tasks"));
+  document.getElementById("tabHistoryAudit")?.addEventListener("click", () => switchHistoryTab("audit"));
+
+  // Errors Clear Resolved
+  document.getElementById("btnClearErrors")?.addEventListener("click", clearAllErrors);
 }
+
+function switchHistoryTab(tab) {
+  const isAudit = tab === "audit";
+  const btnTasks = document.getElementById("tabHistoryTasks");
+  const btnAudit = document.getElementById("tabHistoryAudit");
+  const panelTasks = document.getElementById("historyTasksPanel");
+  const panelAudit = document.getElementById("historyAuditPanel");
+
+  if (btnTasks) {
+    btnTasks.classList.toggle("active", !isAudit);
+    btnTasks.setAttribute("aria-selected", String(!isAudit));
+  }
+  if (btnAudit) {
+    btnAudit.classList.toggle("active", isAudit);
+    btnAudit.setAttribute("aria-selected", String(isAudit));
+  }
+  if (panelTasks) panelTasks.hidden = isAudit;
+  if (panelAudit) panelAudit.hidden = !isAudit;
+}
+
+/* ---------- Data Fetching & Refresh ---------- */
 
 async function initDashboard() {
   await Promise.all([
@@ -574,7 +854,7 @@ async function initDashboard() {
   ]);
 }
 
-async function refreshData() {
+async function refreshAll() {
   await Promise.all([
     fetchHealth(),
     fetchTasks(),
@@ -582,130 +862,239 @@ async function refreshData() {
     fetchErrors(),
     fetchAudit(),
   ]);
+  if (activeTaskId) {
+    await refreshActiveTaskWorkspace();
+  }
 }
 
 async function fetchHealth() {
+  const dbEl = document.getElementById("dbStatus");
+  const countEl = document.getElementById("agentsCount");
   try {
     const res = await fetch(`${API_BASE}/health`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    document.getElementById("dbStatus").textContent = "DB: Connected (Postgres)";
-    document.getElementById("agentsCount").textContent = `Agents: ${data.available_agents}`;
-  } catch (err) {
-    document.getElementById("dbStatus").textContent = "DB: Offline";
-    document.getElementById("dbStatus").className = "status-pill status-error";
+    if (dbEl) {
+      dbEl.textContent = "DB: Connected";
+      dbEl.className = "status-pill status-healthy";
+    }
+    if (countEl) countEl.textContent = `${data.available_agents}`;
+  } catch {
+    if (dbEl) {
+      dbEl.textContent = "DB: Offline";
+      dbEl.className = "status-pill status-error";
+    }
   }
 }
 
 async function fetchAgents() {
   const container = document.getElementById("agentsGrid");
+  if (!container) return;
   try {
     const res = await fetch(`${API_BASE}/agents`);
-    const agents = await res.json();
-    container.innerHTML = "";
+    detectedAgents = await res.json();
+    if (!Array.isArray(detectedAgents) || detectedAgents.length === 0) {
+      container.innerHTML = `<span class="agent-chip-loading">No CLI agents detected</span>`;
+      return;
+    }
 
-    agents.forEach((agent) => {
-      const card = document.createElement("div");
-      card.className = "agent-card";
-
+    container.innerHTML = detectedAgents.map((agent) => {
       const caps = [];
-      if (agent.capabilities.supports_headless) caps.push("Headless CLI");
-      if (agent.capabilities.supports_acp) caps.push("ACP");
-      if (agent.capabilities.supports_mcp) caps.push("MCP");
-      if (agent.capabilities.supports_worktrees) caps.push("Worktrees");
-      if (agent.capabilities.supports_json_output) caps.push("JSON Stream");
-
-      card.innerHTML = `
-        <div class="agent-title">${escapeHtml(agent.name)}</div>
-        <div class="agent-version">v${escapeHtml(agent.version)}</div>
-        <div class="caps-tags">
-          ${caps.map((c) => `<span class="cap-tag">${c}</span>`).join("")}
-        </div>
+      if (agent.capabilities?.supports_headless) caps.push("Headless");
+      if (agent.capabilities?.supports_acp) caps.push("ACP");
+      if (agent.capabilities?.supports_mcp) caps.push("MCP");
+      if (agent.capabilities?.supports_json_output) caps.push("Stream");
+      const meta = getAgentMeta(agent.agent_type);
+      return `
+        <button type="button" class="agent-chip" data-agent="${escapeHtml(agent.agent_type)}"
+          aria-pressed="false" title="${escapeHtml(agent.name)} v${escapeHtml(agent.version)} (${caps.join(", ")}) — Click to select worker">
+          <span class="agent-dot" aria-hidden="true"></span>
+          <span>${escapeHtml(agent.name || meta.full)}</span>
+        </button>
       `;
-      container.appendChild(card);
+    }).join("");
+
+    container.querySelectorAll("[data-agent]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const agentType = btn.dataset.agent;
+        const select = document.getElementById("taskAgent");
+        if (select) {
+          select.value = select.value === agentType ? "" : agentType;
+          syncAgentChipPressedState();
+          syncDualPanePreviewHeaders();
+          const chosen = select.value ? getAgentMeta(select.value).full : "Auto (OpenCode)";
+          announceStatus(`Target worker set to ${chosen}`);
+        }
+      });
     });
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Failed to connect to agent registry.</div>`;
+
+    syncAgentChipPressedState();
+    syncDualPanePreviewHeaders();
+  } catch {
+    container.innerHTML = `<span class="agent-chip-loading">Agent registry unavailable</span>`;
   }
+}
+
+function syncAgentChipPressedState() {
+  const chosen = document.getElementById("taskAgent")?.value || "";
+  document.querySelectorAll(".agent-chip[data-agent]").forEach((chip) => {
+    chip.setAttribute("aria-pressed", String(chip.dataset.agent === chosen));
+  });
+}
+
+function pickDefaultActiveTask(tasks) {
+  if (!tasks || tasks.length === 0) return null;
+  const active = tasks.find((t) => t.status === "RUNNING" || t.status === "AWAITING_APPROVAL");
+  return (active || tasks[0]).id;
 }
 
 async function fetchTasks() {
   const tbody = document.getElementById("tasksTbody");
+  const switcher = document.getElementById("activeTaskSelect");
+  const histCount = document.getElementById("historyCount");
+
   try {
     const res = await fetch(`${API_BASE}/tasks`);
     const tasks = await res.json();
+    cachedTasks = Array.isArray(tasks) ? tasks : [];
+    if (histCount) histCount.textContent = String(cachedTasks.length);
 
-    if (tasks.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No tasks submitted yet. Create one above!</td></tr>`;
-      return;
+    // Ensure activeTaskId stays valid
+    const exists = cachedTasks.some((t) => t.id === activeTaskId);
+    if (!exists) {
+      activeTaskId = pickDefaultActiveTask(cachedTasks);
     }
 
-    tbody.innerHTML = tasks.map((t) => {
-      let actionHtml = "-";
-      if (t.status === "PENDING") {
-        actionHtml = `
-          <button class="btn btn-sm btn-run" onclick="executeTask('${t.id}')">Run</button>
-          <button class="btn btn-sm btn-team" onclick="collaborateTask('${t.id}')">Team Run ⚡</button>
-          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
-          <button class="btn-dismiss" onclick="deleteTask('${t.id}')" title="Delete task">✕</button>
-        `;
-      } else if (t.status === "RUNNING") {
-        actionHtml = `
-          <span style="font-size:0.75rem; color:#58a6ff; margin-right:0.3rem;">⏳ Running</span>
-          <button class="btn btn-sm btn-view" onclick="viewTaskDetails('${t.id}', 'chat')">Log</button>
-          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
-          <button class="btn btn-sm btn-stop" onclick="stopTask('${t.id}')">Stop ⏹</button>
-        `;
-      } else if (t.status === "AWAITING_APPROVAL") {
-        actionHtml = `
-          <span style="font-size:0.75rem; color:#f2cc60; margin-right:0.3rem;">⏸ Awaiting You</span>
-          <button class="btn btn-sm btn-team" onclick="viewTaskDetails('${t.id}', 'chat')">⚖️ Decide</button>
-          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
-          <button class="btn btn-sm btn-stop" onclick="stopTask('${t.id}')">Stop ⏹</button>
-        `;
-      } else if (t.status === "COMPLETED") {
-        actionHtml = `
-          <button class="btn btn-sm btn-view" onclick="viewTaskDetails('${t.id}', 'chat')">Log</button>
-          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
-          <button class="btn-dismiss" onclick="deleteTask('${t.id}')" title="Delete task">✕</button>
-        `;
-      } else if (t.status === "FAILED" || t.status === "CANCELLED") {
-        actionHtml = `
-          <button class="btn btn-sm btn-view" style="background:#da3633;" onclick="viewTaskDetails('${t.id}', 'chat')">Details</button>
-          <button class="btn btn-sm btn-files" onclick="viewTaskDetails('${t.id}', 'files')">📁 Files</button>
-          <button class="btn btn-sm btn-secondary" onclick="collaborateTask('${t.id}')" title="Retry task with collaborative team">Retry ↺</button>
-          <button class="btn-dismiss" onclick="deleteTask('${t.id}')" title="Delete task">✕</button>
-        `;
+    // Populate top active-task switcher
+    if (switcher) {
+      if (cachedTasks.length === 0) {
+        switcher.innerHTML = `<option value="">No tasks submitted yet</option>`;
+      } else {
+        switcher.innerHTML = cachedTasks.map((t) => (
+          `<option value="${escapeHtml(t.id)}">[${escapeHtml(t.status)}] ${escapeHtml(t.title)}</option>`
+        )).join("");
+        if (activeTaskId) switcher.value = activeTaskId;
       }
+    }
 
-      return `
-        <tr>
-          <td style="font-family: monospace;">${t.id.slice(0, 8)}...</td>
-          <td>
-            <strong>${escapeHtml(t.title)}</strong>
-            <div style="font-size:0.73rem; color:var(--text-muted); max-width:340px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${escapeHtml(t.description)}">${escapeHtml(t.description)}</div>
-          </td>
-          <td>${t.assigned_agent ? `${getAgentMeta(t.assigned_agent).icon} ${escapeHtml(getAgentMeta(t.assigned_agent).short)}` : "🟣 Antigravity ↔ 🟢 OpenCode"}</td>
-          <td><span class="status-badge status-${t.status}">${t.status}</span></td>
-          <td style="font-size:0.75rem; color:var(--text-muted);">${t.worktree_path ? escapeHtml(t.worktree_path.split('\\\\').pop().split('/').pop()) : 'Root'}</td>
-          <td style="font-size:0.75rem;">${new Date(t.created_at).toLocaleTimeString()}</td>
-          <td style="display:flex; gap:0.3rem; align-items:center;">${actionHtml}</td>
-        </tr>
-      `;
-    }).join("");
-  } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Error fetching tasks.</td></tr>`;
+    // Render Tasks History table
+    if (tbody) {
+      if (cachedTasks.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No tasks submitted yet. Enter a prompt above to start!</td></tr>`;
+      } else {
+        tbody.innerHTML = cachedTasks.map((t) => {
+          const teamText = t.assigned_agent
+            ? `${getAgentMeta(t.assigned_agent).icon} ${escapeHtml(getAgentMeta(t.assigned_agent).short)}`
+            : "🟣 Antigravity ↔ 🟢 OpenCode";
+          const wtLabel = t.worktree_path
+            ? escapeHtml(t.worktree_path.split("\\").pop().split("/").pop())
+            : "Root";
+          const shortTitle = escapeHtml(t.title);
+          let actionButtons = `
+            <button type="button" class="btn btn-sm btn-subtle" data-focus-task="${escapeHtml(t.id)}" aria-label="Focus task ${shortTitle}">Focus</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-files-task="${escapeHtml(t.id)}" aria-label="Inspect files for ${shortTitle}">📁 Files</button>
+          `;
+          if (t.status === "PENDING") {
+            actionButtons += `
+              <button type="button" class="btn btn-sm btn-primary" data-team-task="${escapeHtml(t.id)}" aria-label="Run team workflow for ${shortTitle}">Team ⚡</button>
+              <button type="button" class="btn btn-sm btn-subtle" data-exec-task="${escapeHtml(t.id)}" aria-label="Run single agent for ${shortTitle}">Run</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-delete-task="${escapeHtml(t.id)}" aria-label="Delete task ${shortTitle}">✕</button>
+            `;
+          } else if (t.status === "RUNNING" || t.status === "AWAITING_APPROVAL") {
+            actionButtons += `
+              <button type="button" class="btn btn-sm btn-stop" data-stop-task="${escapeHtml(t.id)}" aria-label="Stop task ${shortTitle}">Stop ⏹</button>
+            `;
+          } else if (t.status === "FAILED" || t.status === "CANCELLED") {
+            actionButtons += `
+              <button type="button" class="btn btn-sm btn-subtle" data-team-task="${escapeHtml(t.id)}" aria-label="Retry task ${shortTitle}">Retry ↺</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-delete-task="${escapeHtml(t.id)}" aria-label="Delete task ${shortTitle}">✕</button>
+            `;
+          } else {
+            actionButtons += `
+              <button type="button" class="btn btn-sm btn-ghost" data-delete-task="${escapeHtml(t.id)}" aria-label="Delete task ${shortTitle}">✕</button>
+            `;
+          }
+          return `
+            <tr>
+              <td>
+                <strong>${shortTitle}</strong>
+                <div class="task-row-sub" title="${escapeHtml(t.description)}">${escapeHtml(t.description)}</div>
+              </td>
+              <td>${teamText}</td>
+              <td><span class="status-badge status-${escapeHtml(t.status)}">${escapeHtml(t.status)}</span></td>
+              <td>${wtLabel}</td>
+              <td>${new Date(t.created_at).toLocaleTimeString()}</td>
+              <td><div class="table-actions">${actionButtons}</div></td>
+            </tr>
+          `;
+        }).join("");
+
+        tbody.querySelectorAll("[data-focus-task]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            focusTaskInWorkspace(btn.dataset.focusTask);
+            closeDialogModal("historyDialog");
+          });
+        });
+        tbody.querySelectorAll("[data-files-task]").forEach((btn) => {
+          btn.addEventListener("click", () => viewTaskDetails(btn.dataset.filesTask, "files"));
+        });
+        tbody.querySelectorAll("[data-team-task]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            collaborateTask(btn.dataset.teamTask);
+            closeDialogModal("historyDialog");
+          });
+        });
+        tbody.querySelectorAll("[data-exec-task]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            executeTask(btn.dataset.execTask);
+            closeDialogModal("historyDialog");
+          });
+        });
+        tbody.querySelectorAll("[data-stop-task]").forEach((btn) => {
+          btn.addEventListener("click", () => stopTask(btn.dataset.stopTask));
+        });
+        tbody.querySelectorAll("[data-delete-task]").forEach((btn) => {
+          btn.addEventListener("click", () => deleteTask(btn.dataset.deleteTask));
+        });
+      }
+    }
+
+    if (activeTaskId) {
+      await refreshActiveTaskWorkspace();
+    } else {
+      renderIdleActionAreas();
+    }
+  } catch {
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">Unable to load tasks.</td></tr>`;
+    }
   }
 }
 
-async function handleTaskSubmit(e) {
-  e.preventDefault();
-  const title = document.getElementById("taskTitle").value.trim();
-  const description = document.getElementById("taskDesc").value.trim();
-  const agentVal = document.getElementById("taskAgent").value;
-  const policyVal = document.getElementById("taskPolicy").value;
-  const rawPath = document.getElementById("projectPath").value.trim();
-  const useWorktree = document.getElementById("useWorktree").checked;
+/* ---------- Task Submission & Actions ---------- */
 
+async function submitAndRunTask(mode = "collaborate") {
+  const titleEl = document.getElementById("taskTitle");
+  const descEl = document.getElementById("taskDesc");
+  const agentEl = document.getElementById("taskAgent");
+  const policyEl = document.getElementById("taskPolicy");
+  const pathInput = document.getElementById("projectPath");
+  const worktreeEl = document.getElementById("useWorktree");
+  const btnTeam = document.getElementById("btnSubmitTask");
+  const btnSingle = document.getElementById("btnSingleRun");
+
+  const description = (descEl?.value || "").trim();
+  if (!description) {
+    showComposerFeedback("Enter a prompt, instruction, or code snippet before running.");
+    descEl?.focus();
+    return;
+  }
+
+  showComposerFeedback("");
+  if (btnTeam) btnTeam.disabled = true;
+  if (btnSingle) btnSingle.disabled = true;
+
+  const rawPath = (pathInput?.value || "").trim();
   let projectPath = rawPath || selectedFolderRoot || null;
   const contextFiles = [...selectedContextFiles];
   if (scopeMode === "files") {
@@ -715,156 +1104,196 @@ async function handleTaskSubmit(e) {
     }
     projectPath = selectedFolderRoot || workspaceRootPath || null;
   }
+  for (const img of attachedImages) {
+    if (img?.path && !contextFiles.includes(img.path)) {
+      contextFiles.push(img.path);
+    }
+  }
 
   const payload = {
-    title: title || null,
+    title: (titleEl?.value || "").trim() || null,
     description,
-    policy_mode: policyVal,
-    use_worktree: useWorktree,
-    preferred_agent: agentVal || null,
+    policy_mode: policyEl?.value || "AUTO_LOW_IMPACT",
+    use_worktree: Boolean(worktreeEl?.checked ?? true),
+    preferred_agent: (agentEl?.value || "") || null,
     project_path: projectPath,
     context_files: contextFiles,
   };
 
   try {
-    const res = await fetch(`${API_BASE}/tasks`, {
+    const createRes = await fetch(`${API_BASE}/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    if (!createRes.ok) {
+      const errData = await createRes.json().catch(() => ({}));
+      throw new Error(errData.detail || "Task submission failed");
+    }
+    const created = await createRes.json();
 
-    if (!res.ok) throw new Error("Submission failed");
-    document.getElementById("taskForm").reset();
-    document.getElementById("taskTitle").placeholder = "Auto-generated from your prompt below (or type a custom title)";
-    document.getElementById("useWorktree").checked = true;
-    closeFsExplorer();
+    const dispatchEndpoint = mode === "execute"
+      ? `${API_BASE}/tasks/${created.id}/execute`
+      : `${API_BASE}/tasks/${created.id}/collaborate`;
+    const runRes = await fetch(dispatchEndpoint, { method: "POST" });
+    if (!runRes.ok) {
+      const errData = await runRes.json().catch(() => ({}));
+      throw new Error(errData.detail || "Dispatch failed");
+    }
+
+    // Reset composer cleanly while preserving target folder root
+    document.getElementById("taskForm")?.reset();
+    if (titleEl) titleEl.placeholder = "Optional title (auto-generated from prompt)";
+    if (worktreeEl) worktreeEl.checked = true;
+    attachedImages = [];
+    renderAttachedImages();
     if (repoRootPath) {
       selectedFolderRoot = repoRootPath;
       workspaceRootPath = repoRootPath;
     }
     setScopeMode("folder");
-    await fetchTasks();
-  } catch (err) {
-    alert("Error submitting task: " + err.message);
-  }
-}
+    syncAgentChipPressedState();
 
-async function deleteTask(taskId) {
-  if (!confirm("Delete this task and its local history?")) return;
-  try {
-    const res = await fetch(`${API_BASE}/tasks/${taskId}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to delete task");
-    if (activeModalTaskId === taskId) closeModal();
-    await Promise.all([fetchTasks(), fetchApprovals(), fetchErrors(), fetchAudit()]);
+    // Switch live dual panes directly to the new task
+    focusTaskInWorkspace(created.id);
+    await fetchTasks();
+    announceStatus(`Dispatched task ${created.title}`);
   } catch (err) {
-    alert("Delete error: " + err.message);
+    showComposerFeedback(`Unable to start task: ${err.message}`);
+  } finally {
+    if (btnTeam) btnTeam.disabled = false;
+    if (btnSingle) btnSingle.disabled = false;
   }
 }
 
 async function executeTask(taskId) {
   try {
     const res = await fetch(`${API_BASE}/tasks/${taskId}/execute`, { method: "POST" });
-    if (!res.ok) throw new Error("Execution failed to dispatch");
-    await fetchTasks();
-    await fetchAudit();
+    if (!res.ok) throw new Error("Execution dispatch failed");
+    focusTaskInWorkspace(taskId);
+    await Promise.all([fetchTasks(), fetchAudit()]);
   } catch (err) {
-    alert("Execution error: " + err.message);
+    showComposerFeedback(`Execution error: ${err.message}`);
   }
 }
 
 async function collaborateTask(taskId) {
   try {
     const res = await fetch(`${API_BASE}/tasks/${taskId}/collaborate`, { method: "POST" });
-    if (!res.ok) throw new Error("Collaboration workflow failed to dispatch");
-    await fetchTasks();
-    await fetchAudit();
+    if (!res.ok) throw new Error("Collaboration dispatch failed");
+    focusTaskInWorkspace(taskId);
+    await Promise.all([fetchTasks(), fetchAudit()]);
   } catch (err) {
-    alert("Collaboration error: " + err.message);
+    showComposerFeedback(`Team workflow error: ${err.message}`);
   }
 }
 
 async function stopTask(taskId) {
-  if (!confirm("Are you sure you want to stop this running task?")) return;
   try {
     const res = await fetch(`${API_BASE}/tasks/${taskId}/cancel`, { method: "POST" });
     if (!res.ok) throw new Error("Failed to stop task");
-    await fetchTasks();
-    await fetchAudit();
+    announceStatus("Stop signal sent to task");
+    await Promise.all([fetchTasks(), fetchAudit()]);
   } catch (err) {
-    alert("Stop error: " + err.message);
+    showComposerFeedback(`Stop error: ${err.message}`);
   }
 }
 
-function switchModalTab(tabName) {
-  currentModalTab = tabName;
-  const tabChatBtn = document.getElementById("tabChat");
-  const tabFilesBtn = document.getElementById("tabFiles");
-  const chatView = document.getElementById("tabChatView");
-  const filesView = document.getElementById("tabFilesView");
-
-  if (tabName === "files") {
-    if (tabFilesBtn) tabFilesBtn.classList.add("active");
-    if (tabChatBtn) tabChatBtn.classList.remove("active");
-    if (filesView) filesView.style.display = "block";
-    if (chatView) chatView.style.display = "none";
-    if (activeModalTaskId) loadTaskFiles(activeModalTaskId);
-  } else {
-    if (tabChatBtn) tabChatBtn.classList.add("active");
-    if (tabFilesBtn) tabFilesBtn.classList.remove("active");
-    if (chatView) chatView.style.display = "block";
-    if (filesView) filesView.style.display = "none";
+async function deleteTask(taskId) {
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${taskId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("Failed to delete task");
+    if (activeTaskId === taskId) {
+      activeTaskId = null;
+      lastLoadedActiveTaskId = null;
+    }
+    announceStatus("Deleted task");
+    await Promise.all([fetchTasks(), fetchApprovals(), fetchErrors(), fetchAudit()]);
+  } catch (err) {
+    showComposerFeedback(`Delete error: ${err.message}`);
   }
 }
 
 function viewTaskDetails(taskId, tab = "chat") {
-  const isNewTask = lastRenderedTaskId !== taskId;
-  activeModalTaskId = taskId;
-  if (isNewTask) {
-    lastRenderedTaskId = taskId;
-    lastModalContentFingerprint = null;
-    eventFingerprints.clear();
-    lastFilesFingerprint = null;
-    const feed = document.getElementById("liveActivityFeed");
-    if (feed) feed.innerHTML = "";
-    const content = document.getElementById("modalContent");
-    if (content) content.innerHTML = "";
+  focusTaskInWorkspace(taskId);
+  if (tab === "files") {
+    closeDialogModal("historyDialog");
+    loadTaskFiles(taskId);
+    openDialogModal("filesDialog");
+  } else {
+    closeDialogModal("historyDialog");
+    closeDialogModal("filesDialog");
   }
-  const modal = document.getElementById("outputModal");
-  if (modal) modal.style.display = "flex";
-  switchModalTab(tab);
-  refreshActiveModal();
-  if (modalPollTimer) clearInterval(modalPollTimer);
-  modalPollTimer = setInterval(refreshActiveModal, 1000);
 }
 
-function refreshActiveModal() {
-  if (!activeModalTaskId) return;
-  loadTaskDetails(activeModalTaskId);
-  loadTaskFiles(activeModalTaskId);
+function focusTaskInWorkspace(taskId) {
+  const changed = lastLoadedActiveTaskId !== taskId;
+  activeTaskId = taskId;
+  const switcher = document.getElementById("activeTaskSelect");
+  if (switcher && taskId) switcher.value = taskId;
+
+  if (changed) {
+    lastLoadedActiveTaskId = taskId;
+    eventFingerprints.clear();
+    lastInspectorSupplementFp = "";
+    lastWorkerSupplementFp = "";
+    lastActiveActionsFp = "";
+    lastFilesFingerprint = null;
+    const left = document.getElementById("inspectorActionStream");
+    const right = document.getElementById("workerActionStream");
+    if (left) left.innerHTML = "";
+    if (right) right.innerHTML = "";
+  }
+  refreshActiveTaskWorkspace();
 }
 
-function viewTaskOutput(taskId) {
-  viewTaskDetails(taskId, "chat");
+/* ---------- Dual Fixed-Height Live Action Areas ---------- */
+
+function renderIdleActionAreas() {
+  const stepper = document.getElementById("stageStepper");
+  const statusBadge = document.getElementById("activeTaskStatusBadge");
+  const actionsWrap = document.getElementById("activeTaskActions");
+  const filesBadge = document.getElementById("headerFilesCount");
+  if (stepper) { stepper.hidden = true; stepper.innerHTML = ""; }
+  if (statusBadge) { statusBadge.hidden = true; }
+  if (actionsWrap) actionsWrap.innerHTML = "";
+  if (filesBadge) filesBadge.textContent = "0";
+
+  syncDualPanePreviewHeaders();
+  const left = document.getElementById("inspectorActionStream");
+  const right = document.getElementById("workerActionStream");
+  if (left) left.innerHTML = `<div class="empty-state">Submit a prompt above to start inspection &amp; verification.</div>`;
+  if (right) right.innerHTML = `<div class="empty-state">Live negotiation &amp; code execution output will stream here.</div>`;
 }
 
-function viewTaskFiles(taskId) {
-  viewTaskDetails(taskId, "files");
-}
+function syncDualPanePreviewHeaders() {
+  const dropdownWorker = document.getElementById("taskAgent")?.value || "";
+  const activeTask = cachedTasks.find((t) => t.id === activeTaskId);
+  const inspectorMeta = getAgentMeta("ANTIGRAVITY");
+  const workerKey = activeTask?.assigned_agent && activeTask.assigned_agent !== "ANTIGRAVITY"
+    ? activeTask.assigned_agent
+    : (dropdownWorker && dropdownWorker !== "ANTIGRAVITY" ? dropdownWorker : "OPENCODE");
+  const workerMeta = getAgentMeta(workerKey);
 
-function agentBadgeHtml(agentName) {
-  const m = getAgentMeta(agentName);
-  return `<span class="agent-pill ${m.pillClass}">${m.icon} ${escapeHtml(m.short)}</span>`;
+  const inspTitle = document.getElementById("inspectorAreaTitle");
+  const workTitle = document.getElementById("workerAreaTitle");
+  if (inspTitle && !activeTaskId) {
+    inspTitle.textContent = `${inspectorMeta.icon} ${inspectorMeta.short} Action Area`;
+  }
+  if (workTitle && !activeTaskId) {
+    workTitle.textContent = `${workerMeta.icon} ${workerMeta.short} Action Area`;
+  }
 }
 
 function renderStageStepper(workflow) {
   const stepper = document.getElementById("stageStepper");
   if (!stepper) return;
   if (!workflow) {
-    stepper.style.display = "none";
+    stepper.hidden = true;
     stepper.innerHTML = "";
     return;
   }
-  stepper.style.display = "grid";
+  stepper.hidden = false;
   const inspector = getAgentMeta(workflow.inspector_agent || "ANTIGRAVITY");
   const worker = getAgentMeta(workflow.worker_agent || "OPENCODE");
   const stages = [
@@ -892,65 +1321,70 @@ function renderStageStepper(workflow) {
         icon = `<span class="spinner-dot"></span>`;
       }
     }
-    return `<div class="stage-step ${cls}">${icon}<span>${st.label}</span></div>`;
+    return `<div class="stage-step ${cls}">${icon}<span>${escapeHtml(st.label)}</span></div>`;
   }).join("");
 }
 
-function renderActivityFeed(events) {
-  const feed = document.getElementById("liveActivityFeed");
-  if (!feed) return;
-
-  const modalBody = feed.closest(".modal-body");
-  const nearBottom = modalBody
-    ? (modalBody.scrollHeight - modalBody.scrollTop - modalBody.clientHeight < 70)
-    : false;
-
-  if (!events || events.length === 0) {
-    if (feed.children.length === 0) {
-      feed.innerHTML = `<div class="empty-state" style="padding:0.9rem;">⏳ Waiting for live agent events...</div>`;
-    }
-    return;
+function renderActiveTaskBar(task, workflow) {
+  const statusBadge = document.getElementById("activeTaskStatusBadge");
+  const actionsWrap = document.getElementById("activeTaskActions");
+  if (statusBadge && task) {
+    statusBadge.hidden = false;
+    statusBadge.className = `status-badge status-${task.status}`;
+    statusBadge.textContent = task.status;
   }
+  renderStageStepper(workflow);
 
-  const placeholder = feed.querySelector(".empty-state");
-  if (placeholder) placeholder.remove();
+  if (!actionsWrap || !task) return;
+  const fp = `${task.id}|${task.status}`;
+  if (fp === lastActiveActionsFp) return;
+  lastActiveActionsFp = fp;
 
-  events.forEach((ev) => {
-    const fp = `${ev.updated_at}|${ev.status}|${(ev.content || "").length}`;
-    if (eventFingerprints.get(ev.id) === fp) return;
+  let buttons = `<button type="button" class="btn btn-sm btn-subtle" id="btnActiveFiles">📁 Files</button>`;
+  if (task.status === "PENDING") {
+    buttons += `
+      <button type="button" class="btn btn-sm btn-primary" id="btnActiveTeam">Run Team ⚡</button>
+      <button type="button" class="btn btn-sm btn-subtle" id="btnActiveExec">Single Run</button>
+    `;
+  } else if (task.status === "RUNNING" || task.status === "AWAITING_APPROVAL") {
+    buttons += `<button type="button" class="btn btn-sm btn-stop" id="btnActiveStop">Stop ⏹</button>`;
+  } else if (task.status === "FAILED" || task.status === "CANCELLED") {
+    buttons += `<button type="button" class="btn btn-sm btn-subtle" id="btnActiveRetry">Retry ↺</button>`;
+  }
+  actionsWrap.innerHTML = buttons;
 
-    let node = feed.querySelector(`[data-event-id="${ev.id}"]`);
-    if (!node) {
-      node = createEventElement(ev);
-      feed.appendChild(node);
-    } else {
-      updateEventElement(node, ev);
-    }
-    eventFingerprints.set(ev.id, fp);
+  document.getElementById("btnActiveFiles")?.addEventListener("click", () => {
+    loadTaskFiles(task.id);
+    openDialogModal("filesDialog");
   });
-
-  if (nearBottom && modalBody) {
-    modalBody.scrollTop = modalBody.scrollHeight;
-  }
+  document.getElementById("btnActiveTeam")?.addEventListener("click", () => collaborateTask(task.id));
+  document.getElementById("btnActiveExec")?.addEventListener("click", () => executeTask(task.id));
+  document.getElementById("btnActiveStop")?.addEventListener("click", () => stopTask(task.id));
+  document.getElementById("btnActiveRetry")?.addEventListener("click", () => collaborateTask(task.id));
 }
 
 function toolStatusIcon(status) {
   if (status === "running") return `<span class="spinner-dot"></span>`;
-  if (status === "failed") return `<span style="color:#f85149; font-weight:700;">✕</span>`;
-  return `<span style="color:#3fb950; font-weight:700;">✓</span>`;
+  if (status === "failed") return `<span style="color:var(--danger); font-weight:700;">✕</span>`;
+  return `<span style="color:var(--ok); font-weight:700;">✓</span>`;
 }
 
-function createEventElement(ev) {
+function agentBadgeHtml(agentName) {
+  const m = getAgentMeta(agentName);
+  return `<span class="agent-pill ${m.pillClass}">${m.icon} ${escapeHtml(m.short)}</span>`;
+}
+
+function createEventElement(ev, paneKey) {
   if (ev.kind === "tool") {
     const details = document.createElement("details");
     details.className = "activity-tool-card";
-    details.dataset.eventId = String(ev.id);
+    details.dataset.eventId = `${paneKey}-${ev.id}`;
     details.innerHTML = `<summary class="activity-tool-header"></summary><div class="activity-tool-body"><pre></pre></div>`;
     updateEventElement(details, ev);
     return details;
   }
   const div = document.createElement("div");
-  div.dataset.eventId = String(ev.id);
+  div.dataset.eventId = `${paneKey}-${ev.id}`;
   updateEventElement(div, ev);
   return div;
 }
@@ -959,10 +1393,11 @@ function updateEventElement(node, ev) {
   if (ev.kind === "tool") {
     node.dataset.status = ev.status || "done";
     const summary = node.querySelector("summary");
-    const dur = ev.duration_seconds != null ? `${ev.duration_seconds.toFixed(1)}s` : (ev.status === "running" ? "running…" : "");
+    const dur = ev.duration_seconds != null
+      ? `${ev.duration_seconds.toFixed(1)}s`
+      : (ev.status === "running" ? "running…" : "");
     summary.innerHTML = `
       ${toolStatusIcon(ev.status)}
-      ${agentBadgeHtml(ev.agent)}
       ${ev.phase ? `<span class="phase-badge">${escapeHtml(ev.phase)}</span>` : ""}
       <span class="tool-name-pill">${escapeHtml(ev.tool || "tool")}</span>
       <span class="activity-tool-target" title="${escapeHtml(ev.title || "")}">${escapeHtml(ev.title || "(working)")}</span>
@@ -978,7 +1413,7 @@ function updateEventElement(node, ev) {
     const cursor = ev.status === "running" ? ` <span class="stream-cursor">▋</span>` : "";
     node.innerHTML = `
       <div class="activity-text-meta">
-        <span>${agentBadgeHtml(ev.agent)} <span style="color:var(--text-muted); margin-left:0.35rem;">Live Response</span></span>
+        <span>${agentBadgeHtml(ev.agent)} <span style="margin-inline-start:0.3rem; color:var(--text-muted);">Live Output</span></span>
         ${ev.phase ? `<span class="phase-badge">${escapeHtml(ev.phase)}</span>` : ""}
       </div>
       <div class="activity-text-body">${escapeHtml(ev.content || "")}${cursor}</div>
@@ -997,294 +1432,358 @@ function updateEventElement(node, ev) {
   node.innerHTML = `${icon} ${agentBadgeHtml(ev.agent)} <span>${escapeHtml(ev.title || ev.content || "")}</span>`;
 }
 
-async function loadTaskDetails(taskId) {
-  const meta = document.getElementById("modalMeta");
-  const content = document.getElementById("modalContent");
+function updateScrollPaneEvents(containerId, paneKey, events, supplementHtml, supplementFp, isLeft) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
 
+  const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 70;
+  const placeholder = container.querySelector(".empty-state");
+  if (events.length > 0 || supplementHtml) {
+    if (placeholder) placeholder.remove();
+  }
+
+  // Track which event DOM nodes belong here
+  const activeIds = new Set(events.map((ev) => `${paneKey}-${ev.id}`));
+  container.querySelectorAll("[data-event-id]").forEach((el) => {
+    if (!activeIds.has(el.dataset.eventId)) el.remove();
+  });
+
+  // Insert events before any trailing supplement container so summaries stay at the bottom
+  let supplementBox = container.querySelector("[data-supplement-box]");
+  events.forEach((ev) => {
+    const key = `${paneKey}-${ev.id}`;
+    const fp = `${ev.updated_at}|${ev.status}|${(ev.content || "").length}`;
+    let node = container.querySelector(`[data-event-id="${key}"]`);
+    if (!node) {
+      node = createEventElement(ev, paneKey);
+      if (supplementBox) container.insertBefore(node, supplementBox);
+      else container.appendChild(node);
+      eventFingerprints.set(key, fp);
+    } else if (eventFingerprints.get(key) !== fp) {
+      updateEventElement(node, ev);
+      eventFingerprints.set(key, fp);
+    }
+  });
+
+  // Update trailing stage summary / failure / raw log block only if changed
+  const prevSupFp = isLeft ? lastInspectorSupplementFp : lastWorkerSupplementFp;
+  if (supplementFp !== prevSupFp) {
+    if (isLeft) lastInspectorSupplementFp = supplementFp;
+    else lastWorkerSupplementFp = supplementFp;
+
+    if (!supplementHtml) {
+      if (supplementBox) supplementBox.remove();
+    } else {
+      if (!supplementBox) {
+        supplementBox = document.createElement("div");
+        supplementBox.dataset.supplementBox = "1";
+        supplementBox.style.display = "flex";
+        supplementBox.style.flexDirection = "column";
+        supplementBox.style.gap = "0.45rem";
+        container.appendChild(supplementBox);
+      }
+      supplementBox.innerHTML = supplementHtml;
+    }
+  }
+
+  if (events.length === 0 && !supplementHtml && !container.querySelector(".empty-state")) {
+    container.innerHTML = `<div class="empty-state">${isLeft
+      ? "Waiting for inspection / verification activity…"
+      : "Waiting for negotiation / implementation activity…"}</div>`;
+  }
+
+  if (nearBottom) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function updatePaneStatusPill(pillId, agentKey, events, workflow, task) {
+  const pill = document.getElementById(pillId);
+  if (!pill) return;
+
+  const taskStatus = task?.status || "IDLE";
+  const isLeft = pillId === "inspectorStatusPill";
+  const phase = workflow?.current_phase || "";
+  const isPhaseActive = (isLeft && ["INSPECTION", "VERIFICATION"].includes(phase))
+    || (!isLeft && ["NEGOTIATION", "EXECUTION"].includes(phase));
+  const hasRunningEvent = taskStatus === "RUNNING" && events.some((ev) => ev.status === "running");
+
+  if (taskStatus === "RUNNING" && (hasRunningEvent || isPhaseActive)) {
+    pill.textContent = "Streaming";
+    pill.className = "status-pill status-running";
+  } else if (taskStatus === "RUNNING") {
+    pill.textContent = "Standby";
+    pill.className = "status-pill status-agent";
+  } else if (taskStatus === "AWAITING_APPROVAL") {
+    pill.textContent = "Awaiting You";
+    pill.className = "status-pill status-waiting";
+  } else if (taskStatus === "FAILED") {
+    const failedHere = events.some((ev) => ev.status === "failed" || ev.kind === "error") || isPhaseActive;
+    pill.textContent = failedHere ? "Failed" : "Halted";
+    pill.className = failedHere ? "status-pill status-error" : "status-pill";
+  } else if (taskStatus === "CANCELLED") {
+    pill.textContent = "Stopped";
+    pill.className = "status-pill";
+  } else if (taskStatus === "COMPLETED") {
+    pill.textContent = "Done";
+    pill.className = "status-pill status-healthy";
+  } else if (events.length > 0) {
+    pill.textContent = `${events.length} events`;
+    pill.className = "status-pill status-agent";
+  } else {
+    pill.textContent = taskStatus === "PENDING" ? "Queued" : "Idle";
+    pill.className = "status-pill";
+  }
+}
+
+async function refreshActiveTaskWorkspace() {
+  const taskId = activeTaskId;
+  if (!taskId) return;
+
+  const task = cachedTasks.find((t) => t.id === taskId) || null;
   try {
-    const [wfRes, evRes, aprRes] = await Promise.all([
+    const [wfRes, evRes, runsRes, filesRes] = await Promise.all([
       fetch(`${API_BASE}/tasks/${taskId}/workflow`),
       fetch(`${API_BASE}/tasks/${taskId}/events`),
-      fetch(`${API_BASE}/approvals`),
+      fetch(`${API_BASE}/tasks/${taskId}/runs`),
+      fetch(`${API_BASE}/tasks/${taskId}/files`),
     ]);
+    if (activeTaskId !== taskId) return;
+
     const workflow = wfRes.ok ? await wfRes.json() : null;
     const evPayload = evRes.ok ? await evRes.json() : { events: [] };
     const events = evPayload.events || [];
-    const allApprovals = aprRes.ok ? await aprRes.json() : [];
-    const pendingApproval = allApprovals.find((a) => a.task_id === taskId);
+    const runs = runsRes.ok ? await runsRes.json() : [];
+    const filesData = filesRes.ok ? await filesRes.json() : null;
 
-    renderStageStepper(workflow);
-    renderActivityFeed(events);
-
-    if (pendingDecisionInFlight) return;
-    const focused = document.activeElement;
-    if (
-      focused && content.contains(focused) && (
-        focused.classList.contains("approval-note-input")
-        || focused.classList.contains("btn-approve")
-        || focused.classList.contains("btn-deny")
-      )
-    ) {
-      return;
+    if (filesData) {
+      const totalFiles = (filesData.total_changed || 0) + (filesData.total_activity || 0);
+      const headerFilesBadge = document.getElementById("headerFilesCount");
+      const modalFilesBadge = document.getElementById("modalFilesBadge");
+      if (headerFilesBadge) headerFilesBadge.textContent = String(totalFiles);
+      if (modalFilesBadge) modalFilesBadge.textContent = String(totalFiles);
+      if (document.getElementById("filesDialog")?.open) {
+        renderFilesDialogContent(filesData);
+      }
     }
 
-    const aprFp = pendingApproval
-      ? `${pendingApproval.id}|${pendingApproval.action_type}|${pendingApproval.risk_level}`
-      : "none";
+    renderActiveTaskBar(task, workflow);
 
-    const existingModalNotes = {};
-    content.querySelectorAll(".approval-note-input").forEach((inp) => {
-      existingModalNotes[inp.id] = inp.value;
+    // Determine dynamic left (Inspector) and right (Worker/Negotiator) agent names
+    const inspectorKey = workflow?.inspector_agent || "ANTIGRAVITY";
+    const dropdownWorker = document.getElementById("taskAgent")?.value || "";
+    const workerKey = workflow?.worker_agent
+      || (task?.assigned_agent && task.assigned_agent !== inspectorKey ? task.assigned_agent : null)
+      || (dropdownWorker && dropdownWorker !== inspectorKey ? dropdownWorker : "OPENCODE");
+
+    const inspectorMeta = getAgentMeta(inspectorKey);
+    const workerMeta = getAgentMeta(workerKey);
+
+    const inspTitleEl = document.getElementById("inspectorAreaTitle");
+    const workTitleEl = document.getElementById("workerAreaTitle");
+    if (inspTitleEl) inspTitleEl.textContent = `${inspectorMeta.icon} ${inspectorMeta.short} Action Area`;
+    if (workTitleEl) workTitleEl.textContent = `${workerMeta.icon} ${workerMeta.short} Action Area`;
+
+    // Partition events across Left vs Right Action Areas
+    const leftEvents = [];
+    const rightEvents = [];
+    const sameAgentMode = inspectorKey === workerKey;
+
+    events.forEach((ev) => {
+      if (sameAgentMode) {
+        if (["NEGOTIATION", "EXECUTION"].includes(ev.phase)) rightEvents.push(ev);
+        else leftEvents.push(ev);
+        return;
+      }
+      if (ev.agent === inspectorKey) {
+        leftEvents.push(ev);
+      } else if (ev.agent === workerKey) {
+        rightEvents.push(ev);
+      } else if (ev.agent === "SYSTEM") {
+        if (["NEGOTIATION", "EXECUTION"].includes(ev.phase)) rightEvents.push(ev);
+        else leftEvents.push(ev);
+      } else {
+        rightEvents.push(ev);
+      }
     });
 
-    let approvalBannerHtml = "";
-    if (pendingApproval) {
-      approvalBannerHtml = `
-        <div class="modal-approval-box">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <strong style="color:#f2cc60;">⏸ Human Decision Required: ${escapeHtml(pendingApproval.action_type)}</strong>
-            <span class="badge badge-warning">${escapeHtml(pendingApproval.risk_level)}</span>
-          </div>
-          <div style="font-size:0.82rem; color:var(--text-bright);">${escapeHtml(pendingApproval.description)}</div>
-          <div style="font-family:monospace; font-size:0.74rem; color:#79c0ff; word-break:break-all;">${escapeHtml(pendingApproval.command_or_path)}</div>
-          <input type="text" class="approval-note-input" id="modalAprNote_${escapeHtml(pendingApproval.id)}"
-            placeholder="Optional instructions for agents (e.g. skip driver upgrade, fix test)...">
-          <div class="approval-actions">
-            <button type="button" class="btn btn-approve" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'APPROVED', this)">Approve &amp; Continue ✓</button>
-            <button type="button" class="btn btn-deny" onclick="decideApproval('${escapeHtml(pendingApproval.id)}', 'DENIED', this)">Deny &amp; Stop ✕</button>
-          </div>
-        </div>
-      `;
-    }
+    // Partition completed workflow stage summaries & failure reports
+    let leftSupHtml = "";
+    let rightSupHtml = "";
 
     if (workflow) {
-      const modalFp = `${taskId}|wf|${workflow.id}|${workflow.current_phase}|${workflow.status}|${workflow.is_verified}|${(workflow.messages || []).length}|${(workflow.verification_report || "").length}|${aprFp}`;
-      if (modalFp === lastModalContentFingerprint) return;
-
-      const inspector = getAgentMeta(workflow.inspector_agent || "ANTIGRAVITY");
-      const worker = getAgentMeta(workflow.worker_agent || "OPENCODE");
-      document.getElementById("modalTitle").textContent = `Bilateral Teamwork: ${inspector.short} ↔ ${worker.short}`;
-      const verifyHtml = workflow.is_verified
-        ? `<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by ${escapeHtml(inspector.short)}</span>`
-        : (workflow.status === "FAILED"
-            ? '<span style="color:#f85149; font-weight:600;">✕ Rejected / Failed</span>'
-            : (workflow.status === "CANCELLED"
-                ? '<span style="color:#8b949e; font-weight:600;">⏹ Cancelled</span>'
-                : '<span style="color:#d29922;">In Progress...</span>'));
-      meta.innerHTML = `
-        <strong>Current Stage:</strong> <span class="phase-badge">${workflow.current_phase}</span> &bull;
-        <strong>Status:</strong> <span class="status-badge status-${workflow.status}">${workflow.status}</span> &bull;
-        <strong>Verification:</strong> ${verifyHtml}
-      `;
-
-      let alertHtml = approvalBannerHtml;
-      if (workflow.status === "FAILED") {
-        alertHtml += `
-          <div style="background:rgba(218,54,51,0.18); border:1px solid #da3633; border-radius:6px; padding:0.75rem 1rem; color:#f85149; margin-bottom:0.5rem;">
-            <strong>🚨 Workflow Execution Halted with Error:</strong>
-            <div style="margin-top:0.25rem; font-size:0.8rem; color:#f0f6fc;">${escapeHtml(workflow.verification_report || 'An error occurred during agent execution.')}</div>
+      if (workflow.status === "FAILED" && workflow.verification_report) {
+        leftSupHtml += `
+          <div class="activity-error-line" role="alert">
+            <strong>🚨 Workflow Failed:</strong> ${escapeHtml(workflow.verification_report)}
           </div>
         `;
       }
-
-      if (workflow.messages && workflow.messages.length > 0) {
-        let html = alertHtml + `<div class="files-section-heading">Completed Stage Summaries</div>`;
-        workflow.messages.forEach((msg) => {
-          const senderMeta = getAgentMeta(msg.sender);
-          const roleText = msg.sender === workflow.inspector_agent
-            ? "Architect / Quality Reviewer"
-            : "Negotiator / Implementer";
-          const roleLabel = `${senderMeta.icon} ${escapeHtml(senderMeta.full)} (${roleText})`;
-
-          html += `
-            <div class="msg-bubble ${senderMeta.bubbleClass}">
-              <div class="msg-header">
-                <span>${roleLabel}</span>
-                <span class="phase-badge">${msg.phase}</span>
-              </div>
-              <div class="msg-body">${escapeHtml(msg.content)}</div>
-            </div>
-          `;
-        });
-        content.innerHTML = html;
-      } else {
-        content.innerHTML = alertHtml;
-      }
-      lastModalContentFingerprint = modalFp;
-      Object.entries(existingModalNotes).forEach(([id, val]) => {
-        const inp = document.getElementById(id);
-        if (inp) inp.value = val;
+      const phaseCounts = new Map();
+      (workflow.messages || []).forEach((msg) => {
+        phaseCounts.set(msg.phase, (phaseCounts.get(msg.phase) || 0) + 1);
       });
-      return;
-    }
-
-    // Fallback to single agent run
-    document.getElementById("modalTitle").textContent = "Single Agent Execution Details";
-    const res = await fetch(`${API_BASE}/tasks/${taskId}/runs`);
-    const runs = await res.json();
-
-    if (!runs || runs.length === 0) {
-      const noRunFp = `${taskId}|norun|${events.length}|${aprFp}`;
-      if (noRunFp === lastModalContentFingerprint) return;
-      meta.textContent = `Task ID: ${taskId}`;
-      content.innerHTML = approvalBannerHtml + (events.length ? "" : `<div class="empty-state">No run records found for this task.</div>`);
-      lastModalContentFingerprint = noRunFp;
-      Object.entries(existingModalNotes).forEach(([id, val]) => {
-        const inp = document.getElementById(id);
-        if (inp) inp.value = val;
+      const phaseSeen = new Map();
+      (workflow.messages || []).forEach((msg) => {
+        const idx = (phaseSeen.get(msg.phase) || 0) + 1;
+        phaseSeen.set(msg.phase, idx);
+        const totalForPhase = phaseCounts.get(msg.phase) || 1;
+        const roundLabel = totalForPhase > 1 ? ` #${idx}` : "";
+        const goesRight = sameAgentMode
+          ? ["NEGOTIATION", "EXECUTION"].includes(msg.phase)
+          : msg.sender === workerKey;
+        const senderMeta = getAgentMeta(msg.sender);
+        const card = `
+          <details class="stage-summary-card">
+            <summary>
+              <span>${senderMeta.icon} Stage Summary &mdash; ${escapeHtml(msg.phase)}${roundLabel}</span>
+              <span class="phase-badge">${escapeHtml(senderMeta.short)}</span>
+            </summary>
+            <div class="stage-summary-body">${escapeHtml(msg.content)}</div>
+          </details>
+        `;
+        if (goesRight) rightSupHtml += card;
+        else leftSupHtml += card;
       });
-      return;
+    } else if (runs.length > 0 && events.length === 0) {
+      // Single-agent run fallback output
+      const latest = runs[0];
+      let text = "";
+      if (latest.stdout) text += "=== STDOUT ===\n" + latest.stdout + "\n\n";
+      if (latest.stderr) text += "=== STDERR ===\n" + latest.stderr + "\n\n";
+      if (latest.error_reason) text += "=== ERROR ===\n" + latest.error_reason + "\n";
+      const logCard = `<pre class="output-terminal">${escapeHtml(text || "Initializing agent run…")}</pre>`;
+      if (latest.agent_type === inspectorKey) leftSupHtml += logCard;
+      else rightSupHtml += logCard;
     }
 
-    const latest = runs[0];
-    const runsFp = `${taskId}|run|${latest.id}|${latest.status}|${latest.exit_code}|${(latest.stdout || "").length}|${(latest.stderr || "").length}|${events.length}|${aprFp}`;
-    if (runsFp === lastModalContentFingerprint) return;
+    const leftSupFp = `${taskId}|L|${leftSupHtml.length}|${workflow?.status || ""}|${(workflow?.messages || []).length}`;
+    const rightSupFp = `${taskId}|R|${rightSupHtml.length}|${workflow?.status || ""}|${(workflow?.messages || []).length}`;
 
-    meta.innerHTML = `
-      <strong>Agent:</strong> ${latest.agent_type} &bull;
-      <strong>Status:</strong> <span class="status-badge status-${latest.status}">${latest.status}</span> &bull;
-      <strong>Duration:</strong> ${latest.duration_seconds ? latest.duration_seconds.toFixed(2) + 's' : 'In progress'} &bull;
-      <strong>Exit Code:</strong> ${latest.exit_code !== null ? latest.exit_code : '-'}
-    `;
+    updateScrollPaneEvents("inspectorActionStream", "L", leftEvents, leftSupHtml, leftSupFp, true);
+    updateScrollPaneEvents("workerActionStream", "R", rightEvents, rightSupHtml, rightSupFp, false);
 
-    let text = "";
-    if (latest.stdout) text += "=== STDOUT ===\n" + latest.stdout + "\n\n";
-    if (latest.stderr) text += "=== STDERR ===\n" + latest.stderr + "\n\n";
-    if (latest.error_reason) text += "=== ERROR ===\n" + latest.error_reason + "\n";
-
-    if (events.length > 0) {
-      content.innerHTML = approvalBannerHtml + (text ? `
-        <details class="activity-tool-card">
-          <summary class="activity-tool-header">
-            <span class="tool-name-pill">RAW LOG</span>
-            <span class="activity-tool-target">Process STDOUT / STDERR &amp; Exit Details</span>
-          </summary>
-          <div class="activity-tool-body"><pre>${escapeHtml(text)}</pre></div>
-        </details>
-      ` : "");
-    } else {
-      content.innerHTML = approvalBannerHtml + `<pre class="output-terminal">${escapeHtml(text || "No console output recorded yet. Agent is initializing...")}</pre>`;
-    }
-    lastModalContentFingerprint = runsFp;
-    Object.entries(existingModalNotes).forEach(([id, val]) => {
-      const inp = document.getElementById(id);
-      if (inp) inp.value = val;
-    });
-  } catch (err) {
-    content.innerHTML = `<pre class="output-terminal">Failed to fetch task details: ${escapeHtml(err.message)}</pre>`;
+    updatePaneStatusPill("inspectorStatusPill", inspectorKey, leftEvents, workflow, task);
+    updatePaneStatusPill("workerStatusPill", workerKey, rightEvents, workflow, task);
+  } catch {
+    // Non-fatal during polling
   }
 }
 
-function closeModal() {
-  activeModalTaskId = null;
-  lastModalContentFingerprint = null;
-  if (modalPollTimer) {
-    clearInterval(modalPollTimer);
-    modalPollTimer = null;
-  }
-  const modal = document.getElementById("outputModal");
-  if (modal) modal.style.display = "none";
-}
+/* ---------- Files Worked On & Diffs Dialog ---------- */
 
 async function loadTaskFiles(taskId) {
   const container = document.getElementById("filesContainer");
-  const badge = document.getElementById("modalFilesBadge");
   if (!container) return;
-
   try {
     const res = await fetch(`${API_BASE}/tasks/${taskId}/files`);
     if (!res.ok) throw new Error("Could not fetch file status");
     const data = await res.json();
+    renderFilesDialogContent(data);
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">Error loading files: ${escapeHtml(err.message)}</div>`;
+  }
+}
 
-    const changedFiles = data.changed_files || [];
-    const activityFiles = data.activity_files || [];
-    if (badge) badge.textContent = changedFiles.length + activityFiles.length;
+function renderFilesDialogContent(data) {
+  const container = document.getElementById("filesContainer");
+  const modalBadge = document.getElementById("modalFilesBadge");
+  const headerBadge = document.getElementById("headerFilesCount");
+  if (!container || !data) return;
 
-    const fp = JSON.stringify(data);
-    if (fp === lastFilesFingerprint) return;
-    lastFilesFingerprint = fp;
+  const changedFiles = data.changed_files || [];
+  const activityFiles = data.activity_files || [];
+  const totalCount = changedFiles.length + activityFiles.length;
+  if (modalBadge) modalBadge.textContent = String(totalCount);
+  if (headerBadge) headerBadge.textContent = String(totalCount);
 
-    let html = `
-      <div class="files-summary-bar">
-        <div><strong>Working Directory:</strong> <span style="font-family:monospace; color:var(--accent-color);">${escapeHtml(data.working_dir)}</span></div>
-        <div><strong>Modified:</strong> <span style="color:#3fb950; font-weight:700;">${changedFiles.length}</span> &bull; <strong>Tool Calls:</strong> <span style="color:#58a6ff; font-weight:700;">${activityFiles.length}</span></div>
+  const fp = JSON.stringify(data);
+  if (fp === lastFilesFingerprint) return;
+  lastFilesFingerprint = fp;
+
+  let html = `
+    <div class="files-summary-bar">
+      <div><strong>Working Directory:</strong> <code>${escapeHtml(data.working_dir)}</code></div>
+      <div><strong>Modified:</strong> ${changedFiles.length} &bull; <strong>Tool Calls:</strong> ${activityFiles.length}</div>
+    </div>
+    <h3 class="files-section-heading">✏️ Modified Files on Disk</h3>
+  `;
+
+  if (changedFiles.length === 0) {
+    html += `
+      <div class="empty-state">
+        No uncommitted modifications on disk yet.
+        ${data.context_files && data.context_files.length
+          ? `<div style="margin-block-start:0.4rem;">Targets: ${data.context_files.map((f) => `<code>${escapeHtml(f)}</code>`).join(", ")}</div>`
+          : ""}
       </div>
     `;
-
-    html += `<div class="files-section-heading">✏️ Modified Files on Disk (Git Diff)</div>`;
-    if (changedFiles.length === 0) {
+  } else {
+    changedFiles.forEach((file) => {
       html += `
-        <div class="empty-state" style="padding:1rem;">
-          <p style="font-size:0.85rem; color:var(--text-main);">No uncommitted modifications on disk yet.</p>
-          ${data.context_files && data.context_files.length ? `<p style="margin-top:0.5rem; font-size:0.78rem;"><strong>Target Context Files:</strong> ${data.context_files.map(f => `<code>${escapeHtml(f)}</code>`).join(", ")}</p>` : ''}
+        <div class="file-card">
+          <div class="file-card-header">
+            <span>📄 ${escapeHtml(file.path)}</span>
+            <span class="badge">${escapeHtml(file.status)}</span>
+          </div>
+          <div class="diff-viewer">${formatDiff(file.diff || "")}</div>
         </div>
       `;
-    } else {
-      changedFiles.forEach((file) => {
-        const statusClass = `file-status-${file.status || 'CHANGED'}`;
-        html += `
-          <div class="file-card">
-            <div class="file-card-header">
-              <span class="file-path">📄 ${escapeHtml(file.path)}</span>
-              <span class="file-status-badge ${statusClass}">${file.status}</span>
-            </div>
-            <div class="diff-viewer">${formatDiff(file.diff || '')}</div>
-          </div>
-        `;
-      });
-    }
-
-    html += `<div class="files-section-heading">🔍 Live Agent Tool &amp; File Activity</div>`;
-    if (activityFiles.length === 0) {
-      html += `<div class="empty-state" style="padding:1rem;">No tool invocations recorded for this task yet.</div>`;
-    } else {
-      activityFiles.forEach((act) => {
-        const lowerStatus = (act.status || "done").toLowerCase();
-        const dur = act.duration_seconds != null ? `${act.duration_seconds.toFixed(1)}s` : (lowerStatus === "running" ? "running…" : "");
-        html += `
-          <details class="activity-tool-card" data-status="${lowerStatus}">
-            <summary class="activity-tool-header">
-              ${toolStatusIcon(lowerStatus)}
-              ${agentBadgeHtml(act.agent)}
-              ${act.phase ? `<span class="phase-badge">${escapeHtml(act.phase)}</span>` : ""}
-              <span class="tool-name-pill">${escapeHtml(act.tool)}</span>
-              <span class="activity-tool-target" title="${escapeHtml(act.target)}">${escapeHtml(act.target)}</span>
-              <span class="activity-tool-duration">${dur}</span>
-            </summary>
-            <div class="activity-tool-body"><pre>${escapeHtml(act.output || "(no output)")}</pre></div>
-          </details>
-        `;
-      });
-    }
-
-    container.innerHTML = html;
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Error loading file details: ${escapeHtml(err.message)}</div>`;
+    });
   }
+
+  html += `<h3 class="files-section-heading">🔍 Live Agent Tool &amp; File Activity</h3>`;
+  if (activityFiles.length === 0) {
+    html += `<div class="empty-state">No tool invocations recorded for this task yet.</div>`;
+  } else {
+    activityFiles.forEach((act) => {
+      const lowerStatus = (act.status || "done").toLowerCase();
+      const dur = act.duration_seconds != null ? `${act.duration_seconds.toFixed(1)}s` : (lowerStatus === "running" ? "running…" : "");
+      html += `
+        <details class="activity-tool-card" data-status="${escapeHtml(lowerStatus)}">
+          <summary class="activity-tool-header">
+            ${toolStatusIcon(lowerStatus)}
+            ${agentBadgeHtml(act.agent)}
+            ${act.phase ? `<span class="phase-badge">${escapeHtml(act.phase)}</span>` : ""}
+            <span class="tool-name-pill">${escapeHtml(act.tool)}</span>
+            <span class="activity-tool-target" title="${escapeHtml(act.target)}">${escapeHtml(act.target)}</span>
+            <span class="activity-tool-duration">${dur}</span>
+          </summary>
+          <div class="activity-tool-body"><pre>${escapeHtml(act.output || "(no output)")}</pre></div>
+        </details>
+      `;
+    });
+  }
+
+  container.innerHTML = html;
 }
 
 function formatDiff(diffText) {
   if (!diffText) return `<span class="diff-line diff-ctx">No diff available</span>`;
-  const lines = diffText.split('\n');
-  return lines.map((line) => {
+  return diffText.split("\n").map((line) => {
     let cls = "diff-ctx";
-    if (line.startsWith('+') && !line.startsWith('+++')) cls = "diff-add";
-    else if (line.startsWith('-') && !line.startsWith('---')) cls = "diff-del";
-    else if (line.startsWith('@@') || line.startsWith('+++') || line.startsWith('---')) cls = "diff-hdr";
+    if (line.startsWith("+") && !line.startsWith("+++")) cls = "diff-add";
+    else if (line.startsWith("-") && !line.startsWith("---")) cls = "diff-del";
+    else if (line.startsWith("@@") || line.startsWith("+++") || line.startsWith("---")) cls = "diff-hdr";
     return `<span class="diff-line ${cls}">${escapeHtml(line)}</span>`;
-  }).join('');
+  }).join("");
 }
+
+/* ---------- Human Decisions Area (AWAITING_APPROVAL) ---------- */
 
 async function fetchApprovals() {
   const container = document.getElementById("approvalsList");
   const badge = document.getElementById("approvalsBadge");
+  if (!container) return;
+
   try {
     if (pendingDecisionInFlight) return;
+    const active = document.activeElement;
     if (
-      document.activeElement && container.contains(document.activeElement) && (
-        document.activeElement.classList.contains("approval-note-input")
-        || document.activeElement.classList.contains("btn-approve")
-        || document.activeElement.classList.contains("btn-deny")
+      active && container.contains(active) && (
+        active.classList.contains("approval-note-input")
+        || active.classList.contains("btn-approve")
+        || active.classList.contains("btn-deny")
       )
     ) {
       return;
@@ -1292,44 +1791,68 @@ async function fetchApprovals() {
 
     const res = await fetch(`${API_BASE}/approvals`);
     const approvals = await res.json();
-    badge.textContent = approvals.length;
+    if (badge) badge.textContent = String(approvals.length);
 
-    const approvalsFp = approvals.map((a) => `${a.id}|${a.action_type}|${a.risk_level}`).join(",");
-    if (approvalsFp === lastApprovalsFingerprint) return;
+    const fp = approvals.map((a) => `${a.id}|${a.action_type}|${a.risk_level}`).join(",");
+    if (fp === lastApprovalsFingerprint) return;
 
     const existingNotes = {};
-    container.querySelectorAll(".approval-note-input").forEach((inp) => { existingNotes[inp.id] = inp.value; });
+    container.querySelectorAll(".approval-note-input").forEach((inp) => {
+      existingNotes[inp.id] = inp.value;
+    });
 
     if (approvals.length === 0) {
       container.innerHTML = `<p class="empty-state">No actions currently require human approval.</p>`;
-      lastApprovalsFingerprint = approvalsFp;
+      lastApprovalsFingerprint = fp;
       return;
     }
 
-    container.innerHTML = approvals.map((a) => `
-      <div class="approval-item">
-        <div class="approval-header">
-          <strong style="color:var(--text-bright);">${escapeHtml(a.action_type)}</strong>
-          <span class="badge badge-warning">${escapeHtml(a.risk_level)}</span>
-        </div>
-        <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.3rem;">${escapeHtml(a.description)}</div>
-        <div style="font-family:monospace; font-size:0.75rem; color:#79c0ff; margin-bottom:0.5rem; word-break:break-all;">${escapeHtml(a.command_or_path)}</div>
-        <input type="text" class="approval-note-input" id="aprNote_${escapeHtml(a.id)}"
-          placeholder="Optional instructions for agents (e.g. skip driver upgrade, fix test)...">
-        <div class="approval-actions">
-          <button type="button" class="btn btn-approve" onclick="decideApproval('${escapeHtml(a.id)}', 'APPROVED', this)">Approve &amp; Continue ✓</button>
-          <button type="button" class="btn btn-deny" onclick="decideApproval('${escapeHtml(a.id)}', 'DENIED', this)">Deny &amp; Stop ✕</button>
-        </div>
-      </div>
-    `).join("");
-    lastApprovalsFingerprint = approvalsFp;
+    container.innerHTML = approvals.map((a) => {
+      const safeId = escapeHtml(a.id);
+      const shortId = escapeHtml(a.id.slice(0, 8));
+      return `
+        <form class="modal-approval-box" data-approval-id="${safeId}">
+          <div class="approval-header">
+            <span class="approval-title">⏸ ${escapeHtml(a.action_type)} (AWAITING_APPROVAL)</span>
+            <span class="badge badge-warning">${escapeHtml(a.risk_level)}</span>
+          </div>
+          <div class="approval-desc">${escapeHtml(a.description)}</div>
+          <div class="approval-path">${escapeHtml(a.command_or_path)}</div>
+          <label for="modalAprNote_${safeId}" class="visually-hidden">Optional instructions for ${escapeHtml(a.action_type)}</label>
+          <input type="text" class="approval-note-input" id="modalAprNote_${safeId}"
+            placeholder="Optional instructions for agents (e.g. skip driver upgrade, fix test)…">
+          <div class="approval-actions">
+            <button type="button" class="btn btn-approve" data-decide-approve="${safeId}"
+              aria-label="Approve and Continue ${escapeHtml(a.action_type)} ${shortId}">Approve &amp; Continue ✓</button>
+            <button type="button" class="btn btn-deny" data-decide-deny="${safeId}"
+              aria-label="Deny and Stop ${escapeHtml(a.action_type)} ${shortId}">Deny &amp; Stop ✕</button>
+          </div>
+        </form>
+      `;
+    }).join("");
+    lastApprovalsFingerprint = fp;
+
+    container.querySelectorAll("form.modal-approval-box").forEach((form) => {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const id = form.dataset.approvalId;
+        const btn = form.querySelector("[data-decide-approve]");
+        decideApproval(id, "APPROVED", btn);
+      });
+    });
+    container.querySelectorAll("[data-decide-approve]").forEach((btn) => {
+      btn.addEventListener("click", () => decideApproval(btn.dataset.decideApprove, "APPROVED", btn));
+    });
+    container.querySelectorAll("[data-decide-deny]").forEach((btn) => {
+      btn.addEventListener("click", () => decideApproval(btn.dataset.decideDeny, "DENIED", btn));
+    });
 
     Object.entries(existingNotes).forEach(([id, val]) => {
       const inp = document.getElementById(id);
       if (inp) inp.value = val;
     });
-  } catch (err) {
-    container.innerHTML = `<p class="empty-state">Unable to load approvals.</p>`;
+  } catch {
+    container.innerHTML = `<p class="empty-state">Unable to load pending approvals.</p>`;
   }
 }
 
@@ -1345,9 +1868,8 @@ async function decideApproval(approvalId, decision, btnEl = null) {
   }
 
   try {
-    const modalNote = document.getElementById(`modalAprNote_${approvalId}`);
-    const listNote = document.getElementById(`aprNote_${approvalId}`);
-    const note = ((modalNote && modalNote.value) || (listNote && listNote.value) || "").trim();
+    const noteEl = document.getElementById(`modalAprNote_${approvalId}`);
+    const note = (noteEl?.value || "").trim();
 
     const res = await fetch(`${API_BASE}/approvals/${approvalId}/decide`, {
       method: "POST",
@@ -1358,39 +1880,21 @@ async function decideApproval(approvalId, decision, btnEl = null) {
       const errBody = await res.json().catch(() => ({}));
       throw new Error(errBody.detail || "Decision submission failed");
     }
-    lastModalContentFingerprint = null;
+
     lastApprovalsFingerprint = null;
     pendingDecisionInFlight = false;
+    announceStatus(decision === "APPROVED" ? "Approval granted; workflow resuming." : "Action denied; workflow stopped.");
     await Promise.all([fetchApprovals(), fetchTasks(), fetchAudit()]);
-    if (activeModalTaskId) {
-      await loadTaskDetails(activeModalTaskId);
-    }
+    if (activeTaskId) await refreshActiveTaskWorkspace();
   } catch (err) {
     actionButtons.forEach((b) => { b.disabled = false; });
     if (btnEl) btnEl.textContent = origLabel;
     pendingDecisionInFlight = false;
-    alert("Approval error: " + err.message);
+    showComposerFeedback(`Approval error: ${err.message}`);
   }
 }
 
-async function fetchAudit() {
-  const container = document.getElementById("auditLogContainer");
-  try {
-    const res = await fetch(`${API_BASE}/audit?limit=25`);
-    const logs = await res.json();
-    if (logs.length === 0) return;
-
-    container.innerHTML = logs.map((l) => `
-      <div class="audit-entry">
-        <span class="audit-time">${new Date(l.created_at).toLocaleTimeString()}</span>
-        <span class="audit-type">[${escapeHtml(l.event_type)}]</span>
-        <span>${escapeHtml(l.message)}</span>
-      </div>
-    `).join("");
-  } catch (err) {
-    // Silent fail for audit polling
-  }
-}
+/* ---------- Errors Area & Audit Log ---------- */
 
 async function fetchErrors() {
   const container = document.getElementById("errorCenterList");
@@ -1404,69 +1908,102 @@ async function fetchErrors() {
 
     if (pill) {
       pill.textContent = `Errors: ${errors.length}`;
-      if (errors.length > 0) {
-        pill.className = "status-pill status-error";
-      } else {
-        pill.className = "status-pill status-healthy";
-      }
+      pill.className = errors.length > 0 ? "status-pill status-error" : "status-pill status-healthy";
     }
-
     if (badge) {
-      badge.textContent = `${errors.length} Active Error${errors.length === 1 ? '' : 's'}`;
+      badge.textContent = String(errors.length);
       badge.className = errors.length > 0 ? "badge badge-error" : "badge badge-success";
     }
 
+    const fp = errors.map((e) => `${e.id}|${e.severity}`).join(",");
+    if (fp === lastErrorsFingerprint) return;
+    lastErrorsFingerprint = fp;
+
     if (errors.length === 0) {
-      container.innerHTML = `<div class="empty-state">✓ All systems operational. No active errors or agent failures.</div>`;
+      container.innerHTML = `<div class="empty-state">✓ All systems operational. No active errors.</div>`;
       return;
     }
 
     container.innerHTML = errors.map((err) => {
-      const severityClass = `severity-${err.severity || 'ERROR'}`;
+      const severityClass = `severity-${escapeHtml(err.severity || "ERROR")}`;
       const timeStr = new Date(err.created_at).toLocaleTimeString();
+      const safeTitle = escapeHtml(err.title);
       return `
-        <div class="error-entry ${severityClass}">
+        <div class="error-entry ${severityClass}" role="alert">
           <div class="error-entry-header">
             <div class="error-title-row">
               <span class="error-source-tag">[${escapeHtml(err.source)}]</span>
-              <span class="badge ${err.severity === 'CRITICAL' ? 'badge-error' : 'badge-warning'}">${err.severity}</span>
-              <span class="error-title">${escapeHtml(err.title)}</span>
+              <span class="badge ${err.severity === "CRITICAL" ? "badge-error" : "badge-warning"}">${escapeHtml(err.severity)}</span>
+              <span class="error-title">${safeTitle}</span>
             </div>
-            <button class="btn-dismiss" onclick="resolveError(${err.id})" title="Dismiss error notification">Dismiss ✕</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-resolve-error="${err.id}"
+              aria-label="Dismiss error ${safeTitle} (${err.id})">Dismiss ✕</button>
           </div>
           <div class="error-message">${escapeHtml(err.message)}</div>
-          ${err.stderr ? `<pre class="error-stderr-box">${escapeHtml(err.stderr)}</pre>` : ''}
+          ${err.stderr ? `
+            <details class="error-stderr-details">
+              <summary>Stack trace / stderr</summary>
+              <pre class="error-stderr-box">${escapeHtml(err.stderr)}</pre>
+            </details>
+          ` : ""}
           <div class="error-entry-footer">
-            <span>Task ID: <code>${err.task_id || 'System'}</code> &bull; ${timeStr}</span>
-            ${err.task_id ? `<button class="btn btn-sm btn-view" onclick="viewTaskDetails('${err.task_id}', 'chat')">Inspect Task ➔</button>` : ''}
+            <span>Task: <code>${escapeHtml(err.task_id || "System")}</code> &bull; ${timeStr}</span>
+            ${err.task_id ? `<button type="button" class="btn btn-subtle btn-sm" data-inspect-task="${escapeHtml(err.task_id)}"
+              aria-label="Inspect task ${escapeHtml(err.task_id)} in action areas">Inspect Task ➔</button>` : ""}
           </div>
         </div>
       `;
     }).join("");
-  } catch (err) {
-    // Silent fail for polling
+
+    container.querySelectorAll("[data-resolve-error]").forEach((btn) => {
+      btn.addEventListener("click", () => resolveError(Number(btn.dataset.resolveError)));
+    });
+    container.querySelectorAll("[data-inspect-task]").forEach((btn) => {
+      btn.addEventListener("click", () => focusTaskInWorkspace(btn.dataset.inspectTask));
+    });
+  } catch {
+    // Non-fatal
   }
 }
 
 async function resolveError(errorId) {
   try {
     await fetch(`${API_BASE}/errors/${errorId}/resolve`, { method: "POST" });
+    lastErrorsFingerprint = null;
+    announceStatus(`Dismissed error ${errorId}`);
     await fetchErrors();
-  } catch (e) {
-    console.error("Failed to dismiss error:", e);
+  } catch {
+    // Non-fatal
   }
 }
 
 async function clearAllErrors() {
   try {
     await fetch(`${API_BASE}/errors/clear`, { method: "POST" });
+    lastErrorsFingerprint = null;
+    announceStatus("Cleared all active error notifications");
     await fetchErrors();
-  } catch (e) {
-    console.error("Failed to clear errors:", e);
+  } catch {
+    // Non-fatal
   }
 }
 
-function escapeHtml(str) {
-  if (!str) return "";
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+async function fetchAudit() {
+  const container = document.getElementById("auditLogContainer");
+  if (!container) return;
+  try {
+    const res = await fetch(`${API_BASE}/audit?limit=30`);
+    const logs = await res.json();
+    if (!Array.isArray(logs) || logs.length === 0) return;
+
+    container.innerHTML = logs.map((l) => `
+      <div class="audit-entry">
+        <span class="audit-time">${new Date(l.created_at).toLocaleTimeString()}</span>
+        <span class="audit-type">[${escapeHtml(l.event_type)}]</span>
+        <span>${escapeHtml(l.message)}</span>
+      </div>
+    `).join("");
+  } catch {
+    // Non-fatal
+  }
 }

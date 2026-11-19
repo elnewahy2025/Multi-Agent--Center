@@ -164,6 +164,57 @@ class TestOrchestrator(unittest.TestCase):
             self.assertEqual(r.status_code, 200)
             self.assertIn("no-cache", r.headers.get("cache-control", "").lower())
 
+    def test_image_upload_validation_serving_and_workspace_isolation(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+        from services.orchestrator.workspace import WorkspaceManager
+
+        png_1x1 = base64.b64encode(
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\x0bIDATx\x9cc`\x00\x02"
+            b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        ).decode("ascii")
+        res = self.client.post(
+            "/uploads/image",
+            json={"filename": "Screen Shot 1.png", "data_url": f"data:image/png;base64,{png_1x1}"},
+        )
+        self.assertEqual(res.status_code, 200)
+        uploaded = res.json()
+        saved_path = Path(uploaded["path"])
+        try:
+            self.assertTrue(saved_path.is_file())
+            self.assertTrue(uploaded["url"].startswith("/uploads/"))
+            self.assertNotIn("_", uploaded["filename"])
+
+            get_res = self.client.get(uploaded["url"])
+            self.assertEqual(get_res.status_code, 200)
+            self.assertEqual(get_res.headers.get("content-type"), "image/png")
+
+            # Workspace resolution must keep an external non-git project intact when uploads are attached
+            mgr = WorkspaceManager()
+            with tempfile.TemporaryDirectory() as ext_dir:
+                eff_root, add_dirs = mgr.resolve_effective_project_and_add_dirs(
+                    ext_dir, "Fix button alignment using screenshot", [str(saved_path)]
+                )
+                self.assertEqual(Path(eff_root).resolve(), Path(ext_dir).resolve())
+                self.assertIn(str(saved_path.parent.resolve()), add_dirs)
+        finally:
+            if saved_path.exists():
+                saved_path.unlink()
+
+        bad_res = self.client.post(
+            "/uploads/image",
+            json={"filename": "evil.txt", "data_url": "data:text/plain;base64,SGVsbG8="},
+        )
+        self.assertEqual(bad_res.status_code, 400)
+
+        bad_get = self.client.get("/uploads/missing-file.txt")
+        self.assertEqual(bad_get.status_code, 400)
+
+        missing_get = self.client.get("/uploads/does-not-exist.png")
+        self.assertEqual(missing_get.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
