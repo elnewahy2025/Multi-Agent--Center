@@ -19,6 +19,8 @@ This document separates owner-approved choices from proposals and unresolved que
 | ADR-011 | Python 3.11 with Pydantic contracts selected for orchestrator foundation. | Verified and implemented under `packages/contracts` and `services/orchestrator`. |
 | ADR-012 | FastAPI selected for local Command Center HTTP/REST control plane. | Verified and implemented under `services/orchestrator/api.py`. |
 | ADR-013 | Isolated Git worktrees managed dynamically by WorkspaceManager. | Implemented under `services/orchestrator/workspace.py` with uncommitted changes protection. |
+| ADR-014 | Zero fake completion: halt and record exact CLI stdout/stderr/exit codes on failure. | Replaced fallback placeholder strings with full diagnostic error capture across all workflow stages. |
+| ADR-015 | Centralized Error Messages & Diagnostics Center. | Implemented `ErrorLogModel`, `/errors`, `/diagnostics`, and live dashboard panel for user operational awareness. |
 
 ## Verified environment facts
 
