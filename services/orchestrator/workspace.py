@@ -39,6 +39,21 @@ class WorkspaceManager:
         target_dir = self.worktrees_root / branch
 
         if target_dir.exists():
+            if not self.has_uncommitted_changes(target_dir):
+                rev = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=str(project_path),
+                    capture_output=True,
+                    text=True,
+                )
+                head_sha = rev.stdout.strip() if rev.returncode == 0 else ""
+                if head_sha:
+                    subprocess.run(
+                        ["git", "reset", "--hard", head_sha],
+                        cwd=str(target_dir),
+                        capture_output=True,
+                        text=True,
+                    )
             return target_dir
 
         # Run git worktree add

@@ -349,6 +349,81 @@ class TestCollaborativeWorkflow(unittest.TestCase):
                 finally:
                     self._cleanup_task(task_id)
 
+    def test_workspace_file_map_anti_subagent_and_error_dedup_on_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            (root / "__pycache__").mkdir()
+            (root / "apps" / "dashboard").mkdir(parents=True)
+            (root / "services").mkdir()
+            (root / "apps" / "dashboard" / "app.js").write_text("console.log(1);", encoding="utf-8")
+            (root / "services" / "api.py").write_text("x = 1", encoding="utf-8")
+            (root / "__pycache__" / "ignored.pyc").write_bytes(b"00")
+
+            engine, anti, _opc = self._build_stub_engine(
+                lambda _r, n: "Plan ready." if n == 1 else "VERDICT: APPROVED",
+                lambda _r, n: "AGREED" if n == 1 else "Implemented",
+                root,
+            )
+            fmap = engine._build_workspace_file_map(str(root), ["services/api.py"])
+            self.assertIn("- services/api.py", fmap)
+            self.assertIn("- apps/dashboard/app.js", fmap)
+            self.assertNotIn(".git", fmap)
+            self.assertNotIn("ignored.pyc", fmap)
+
+            task_id = f"tsk_{uuid.uuid4().hex[:8]}"
+            with get_db_session() as s:
+                s.add(TaskModel(id=task_id, title="Retry test", description="Fix app.js", status="FAILED"))
+                s.add(ErrorLogModel(
+                    task_id=task_id, run_id="wf_old", source="ANTIGRAVITY_CLI",
+                    severity="CRITICAL", title="Stage 1 Inspection Failed",
+                    message="Execution timed out after 300 seconds", resolved=False,
+                ))
+            try:
+                wf = engine.run_collaborative_workflow(task_id)
+                self.assertEqual(wf.status, "COMPLETED")
+                self.assertEqual(anti.requests[0].timeout_seconds, 600)
+                self.assertIn("Workspace File Map", anti.requests[0].prompt)
+                self.assertIn("do NOT call invoke_subagent", anti.requests[0].prompt)
+                self.assertIn("apps/dashboard/app.js", anti.requests[0].prompt)
+                with get_db_session() as s:
+                    unresolved = s.query(ErrorLogModel).filter_by(task_id=task_id, resolved=False).count()
+                    self.assertEqual(unresolved, 0)
+            finally:
+                self._cleanup_task(task_id)
+
+    def test_existing_clean_worktree_syncs_to_latest_head(self):
+        import subprocess
+        from services.orchestrator.workspace import WorkspaceManager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True)
+            (repo / "a.txt").write_text("v1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "a.txt"], cwd=str(repo), check=True)
+            subprocess.run(["git", "commit", "-m", "v1"], cwd=str(repo), check=True, capture_output=True)
+
+            wt_root = Path(tmp) / "worktrees"
+            mgr = WorkspaceManager(worktrees_root=wt_root)
+            wt_path = mgr.create_worktree(str(repo), "tsk_sync", branch_name="collab-sync")
+            self.assertEqual((wt_path / "a.txt").read_text(encoding="utf-8"), "v1\n")
+
+            # Advance main repo to v2, then recreate same worktree when clean
+            (repo / "a.txt").write_text("v2\n", encoding="utf-8")
+            subprocess.run(["git", "add", "a.txt"], cwd=str(repo), check=True)
+            subprocess.run(["git", "commit", "-m", "v2"], cwd=str(repo), check=True, capture_output=True)
+
+            wt_synced = mgr.create_worktree(str(repo), "tsk_sync", branch_name="collab-sync")
+            self.assertEqual((wt_synced / "a.txt").read_text(encoding="utf-8"), "v2\n")
+
+            # Dirty worktree must NOT lose uncommitted edits when create_worktree is called again
+            (wt_synced / "a.txt").write_text("dirty-edit\n", encoding="utf-8")
+            wt_dirty = mgr.create_worktree(str(repo), "tsk_sync", branch_name="collab-sync")
+            self.assertEqual((wt_dirty / "a.txt").read_text(encoding="utf-8"), "dirty-edit\n")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,17 +1,23 @@
 """Unit tests for agent bridge adapters."""
 
+import sys
+import tempfile
 import unittest
 
 from packages.contracts import (
+    AgentCapabilities,
+    AgentDescriptor,
     AgentExecutionRequest,
     AgentType,
     PolicyMode,
+    TaskStatus,
 )
 from services.agent_bridge import (
     AgentRegistry,
     AntigravityAdapter,
     OpenCodeAdapter,
 )
+from services.agent_bridge.base import BaseAgentAdapter
 
 
 class TestAdapters(unittest.TestCase):
@@ -160,6 +166,56 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(len(ev_res), 1)
         self.assertEqual(ev_res[0].kind, "final")
         self.assertEqual(ev_res[0].content, "Final summary")
+
+    def test_streaming_grace_window_and_silent_timeout(self):
+        class _DummyAdapter(BaseAgentAdapter):
+            agent_type = AgentType.ANTIGRAVITY
+
+            def detect(self):
+                return AgentDescriptor(
+                    agent_type=AgentType.ANTIGRAVITY,
+                    name="Dummy Streamer",
+                    executable_path=sys.executable,
+                    version="1.0",
+                    is_available=True,
+                    capabilities=AgentCapabilities(supports_headless=True),
+                )
+
+            def build_command(self, request: AgentExecutionRequest):
+                return [sys.executable, "-c", request.prompt]
+
+            def parse_stream_line(self, line: str):
+                from services.agent_bridge.streaming import ActivityEvent
+                s = line.strip()
+                if s.startswith("TEXT:"):
+                    return [ActivityEvent(key="resp", kind="text", status="done", content=s[5:] + "\n", append=True)]
+                return []
+
+        adapter = _DummyAdapter()
+        with tempfile.TemporaryDirectory() as tmp:
+            # Actively streaming past 1s triggers grace window and completes cleanly
+            stream_code = (
+                "import sys, time\n"
+                "for i in range(6):\n"
+                "    print(f'TEXT:chunk-{i}', flush=True)\n"
+                "    time.sleep(0.25)\n"
+            )
+            res_ok = adapter.execute(AgentExecutionRequest(
+                task_id="tsk_grace", run_id="run_grace", prompt=stream_code,
+                working_directory=tmp, timeout_seconds=1,
+            ))
+            self.assertEqual(res_ok.status, TaskStatus.COMPLETED)
+            self.assertEqual(res_ok.exit_code, 0)
+            self.assertIn("chunk-5", res_ok.structured_output["final_text"])
+
+            # Silent hanging process still hits hard timeout without grace
+            hang_code = "import time; time.sleep(5)"
+            res_to = adapter.execute(AgentExecutionRequest(
+                task_id="tsk_hang", run_id="run_hang", prompt=hang_code,
+                working_directory=tmp, timeout_seconds=1,
+            ))
+            self.assertEqual(res_to.status, TaskStatus.TIMED_OUT)
+            self.assertEqual(res_to.exit_code, 124)
 
 
 if __name__ == "__main__":

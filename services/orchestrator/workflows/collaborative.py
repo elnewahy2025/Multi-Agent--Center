@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from packages.contracts import (
     AgentExecutionRequest,
@@ -162,6 +163,54 @@ class CollaborativeWorkflowEngine:
         chunks = [f"### [{f['status']}] {f['path']}\n{f['diff']}" for f in files]
         combined = "\n\n".join(chunks)
         return combined[:4000] if len(combined) > 4000 else combined
+
+    def _build_workspace_file_map(
+        self,
+        worktree_dir: str,
+        context_files: List[str],
+        max_entries: int = 80,
+    ) -> str:
+        """Build a compact workspace file listing so agents don't spend time listing directories."""
+        root = Path(worktree_dir).resolve()
+        if not root.exists():
+            return "(workspace directory not found)"
+
+        skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv", ".pytest_cache"}
+        worktrees_dir = str((root / "workspace" / "worktrees").resolve())
+        discovered: List[str] = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in skip_dirs and os.path.abspath(os.path.join(dirpath, d)) != worktrees_dir
+            )
+            rel_dir = Path(dirpath).resolve().relative_to(root).as_posix()
+            for fname in sorted(filenames):
+                if fname.endswith((".pyc", ".pyo")):
+                    continue
+                rel_file = f"{rel_dir}/{fname}" if rel_dir != "." else fname
+                discovered.append(rel_file)
+
+        prioritized: List[str] = []
+        seen = set()
+        for cf in context_files or []:
+            norm_cf = cf.replace("\\", "/").strip("/")
+            if norm_cf and norm_cf not in seen:
+                prioritized.append(norm_cf)
+                seen.add(norm_cf)
+        for path_str in discovered:
+            if len(prioritized) >= max_entries:
+                break
+            if path_str not in seen:
+                prioritized.append(path_str)
+                seen.add(path_str)
+
+        if not prioritized:
+            return "(no files found in workspace)"
+        lines = [f"- {p}" for p in prioritized[:max_entries]]
+        remaining = len(discovered) - len(lines)
+        if remaining > 0:
+            lines.append(f"... (+{remaining} more files)")
+        return "\n".join(lines)
 
     @staticmethod
     def _detect_high_risk_plan(
@@ -404,6 +453,9 @@ class CollaborativeWorkflowEngine:
                 if (task.project and task.project.root_path)
                 else str(Path(__file__).resolve().parents[3])
             )
+            session.query(ErrorLogModel).filter_by(task_id=task_id, resolved=False).update(
+                {ErrorLogModel.resolved: True}
+            )
             session.add(WorkflowRunModel(
                 id=workflow_id, task_id=task_id, status="RUNNING",
                 current_phase=WorkflowPhase.INSPECTION.value, created_at=now, updated_at=now,
@@ -421,6 +473,7 @@ class CollaborativeWorkflowEngine:
 
         worktree_dir = self._allocate_worktree(project_root, task_id)
         formatted_desc = normalize_task_prompt(task_desc, context_files)
+        file_map = self._build_workspace_file_map(worktree_dir, context_files)
         scope_note = (
             f"Target File(s) / Folder Scope: {', '.join(context_files)}"
             if context_files
@@ -437,6 +490,11 @@ class CollaborativeWorkflowEngine:
                     f"You are {inspector_name}, the Lead Architect inspecting task: '{task_title}'.\n"
                     f"{scope_note}\n\n"
                     f"Requirements:\n{formatted_desc}\n\n"
+                    "Workspace File Map (use read_file directly on relevant paths below; "
+                    "do NOT call invoke_subagent, manage_subagents, or run_command to list directories):\n"
+                    f"{file_map}\n\n"
+                    "Keep inspection focused: read only the 2-5 directly relevant files and output your technical "
+                    "proposal immediately.\n"
                     "Analyze the requirements within this scope and formulate a structured, concise technical proposal "
                     f"and execution plan for {worker_name} to review.\n"
                     "If your plan includes any dangerous, destructive, or high-impact actions that require human "
@@ -444,7 +502,7 @@ class CollaborativeWorkflowEngine:
                     "IMPORTANT: This is Stage 1 (read-only inspection). Do NOT modify, create, or delete any files."
                 ),
                 working_directory=worktree_dir, worktree_name=None,
-                policy_mode=PolicyMode.STRICT, timeout_seconds=300,
+                policy_mode=PolicyMode.STRICT, timeout_seconds=600,
                 context_files=context_files,
             ),
         )
@@ -468,7 +526,7 @@ class CollaborativeWorkflowEngine:
                     "execution steps or list your proposed refinements."
                 ),
                 working_directory=worktree_dir, worktree_name=None,
-                policy_mode=PolicyMode.STRICT, timeout_seconds=300,
+                policy_mode=PolicyMode.STRICT, timeout_seconds=600,
                 context_files=context_files,
             ),
         )
@@ -526,7 +584,7 @@ class CollaborativeWorkflowEngine:
                 AgentExecutionRequest(
                     task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                     prompt=execution_prompt, working_directory=worktree_dir, worktree_name=None,
-                    policy_mode=PolicyMode.AUTO_LOW_IMPACT, timeout_seconds=600,
+                    policy_mode=PolicyMode.AUTO_LOW_IMPACT, timeout_seconds=900,
                     context_files=context_files,
                 ),
             )
@@ -545,7 +603,8 @@ class CollaborativeWorkflowEngine:
                         f"{scope_note}\n\n"
                         f"Worktree Git Changes & Untracked Files:\n{changes_summary}\n\n"
                         f"{worker_name} Execution Summary:\n{execution_text[:2000]}\n\n"
-                        "Inspect the actual files in this working directory and verify whether the implementation is "
+                        "Inspect the actual files in this working directory using read_file directly (do NOT call "
+                        "invoke_subagent or manage_subagents to explore) and verify whether the implementation is "
                         "100% accurate, complete, and free of regressions. "
                         "If this task is fixing an inline pasted code snippet rather than modifying a repository file, "
                         "verify that the corrected code in the Execution Summary is 100% accurate and complete. "
@@ -556,7 +615,7 @@ class CollaborativeWorkflowEngine:
                         f"followed by the exact list of fixes {worker_name} must make."
                     ),
                     working_directory=worktree_dir, worktree_name=None,
-                    policy_mode=PolicyMode.STRICT, timeout_seconds=300,
+                    policy_mode=PolicyMode.STRICT, timeout_seconds=600,
                     context_files=context_files,
                 ),
                 severity="WARNING",
