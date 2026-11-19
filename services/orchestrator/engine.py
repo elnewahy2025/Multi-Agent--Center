@@ -1,0 +1,214 @@
+"""Core task orchestration and execution engine."""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+from packages.contracts import (
+    AgentExecutionRequest,
+    AgentExecutionResult,
+    AgentType,
+    TaskCreate,
+    TaskRead,
+    TaskStatus,
+)
+from services.agent_bridge import AgentRegistry
+from services.orchestrator.db import (
+    AgentRunModel,
+    AuditLogModel,
+    ProjectModel,
+    TaskModel,
+    get_db_session,
+)
+from services.orchestrator.workspace import WorkspaceManager
+
+logger = logging.getLogger("orchestrator.engine")
+
+
+class TaskOrchestrator:
+    """Coordinates task lifecycle, policy enforcement, worktrees, and agent bridges."""
+
+    def __init__(
+        self,
+        registry: Optional[AgentRegistry] = None,
+        workspace_mgr: Optional[WorkspaceManager] = None,
+    ) -> None:
+        self.registry = registry or AgentRegistry()
+        self.workspace_mgr = workspace_mgr or WorkspaceManager()
+
+    def submit_task(self, request: TaskCreate) -> TaskRead:
+        """Register and persist a new task in the Command Center."""
+        task_id = f"tsk_{uuid.uuid4().hex[:12]}"
+        now = datetime.utcnow()
+
+        with get_db_session() as session:
+            # Ensure project exists if project_path provided
+            project_id = request.project_id
+            if request.project_path and not project_id:
+                p_path = str(Path(request.project_path).resolve())
+                existing_p = session.query(ProjectModel).filter_by(root_path=p_path).first()
+                if existing_p:
+                    project_id = existing_p.id
+                else:
+                    project_id = f"proj_{uuid.uuid4().hex[:8]}"
+                    new_p = ProjectModel(
+                        id=project_id,
+                        name=Path(p_path).name,
+                        root_path=p_path,
+                    )
+                    session.add(new_p)
+
+            model = TaskModel(
+                id=task_id,
+                project_id=project_id,
+                title=request.title,
+                description=request.description,
+                assigned_agent=request.preferred_agent.value if request.preferred_agent else None,
+                status=TaskStatus.PENDING.value,
+                policy_mode=request.policy_mode.value,
+                created_at=now,
+                updated_at=now,
+            )
+            model.set_metadata({
+                "context_files": request.context_files,
+                "timeout_seconds": request.timeout_seconds,
+                "use_worktree": request.use_worktree,
+            })
+            session.add(model)
+
+            # Record audit log
+            audit = AuditLogModel(
+                task_id=task_id,
+                event_type="TASK_CREATED",
+                message=f"Task '{request.title}' submitted",
+            )
+            session.add(audit)
+
+        return self.get_task(task_id)  # type: ignore
+
+    def get_task(self, task_id: str) -> Optional[TaskRead]:
+        """Fetch task state by ID."""
+        with get_db_session() as session:
+            model = session.query(TaskModel).filter_by(id=task_id).first()
+            if not model:
+                return None
+            return TaskRead(
+                id=model.id,
+                title=model.title,
+                description=model.description,
+                project_id=model.project_id,
+                assigned_agent=AgentType(model.assigned_agent) if model.assigned_agent else None,
+                status=TaskStatus(model.status),
+                policy_mode=model.policy_mode,  # type: ignore
+                worktree_path=model.worktree_path,
+                created_at=model.created_at,
+                updated_at=model.updated_at,
+                completed_at=model.completed_at,
+                metadata=model.get_metadata(),
+            )
+
+    def execute_task(self, task_id: str) -> AgentExecutionResult:
+        """Execute a pending task using the selected agent adapter."""
+        task = self.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+
+        # Choose eligible agent
+        agent_type = task.assigned_agent
+        if not agent_type:
+            # Default to OpenCode if available, otherwise Antigravity
+            available = self.registry.get_available_agents()
+            if not available:
+                raise RuntimeError("No coding agents are currently available on this machine.")
+            agent_type = available[0].agent_type
+
+        adapter = self.registry.get_adapter(agent_type)
+        if not adapter:
+            raise RuntimeError(f"No adapter registered for agent type: {agent_type}")
+
+        run_id = f"run_{uuid.uuid4().hex[:12]}"
+
+        # Resolve working directory and Git worktree
+        working_dir = "."
+        worktree_path: Optional[Path] = None
+
+        with get_db_session() as session:
+            model = session.query(TaskModel).filter_by(id=task_id).first()
+            if model and model.project:
+                working_dir = model.project.root_path
+
+            # Create isolated worktree if requested
+            if task.metadata.get("use_worktree", True) and working_dir != ".":
+                try:
+                    worktree_path = self.workspace_mgr.create_worktree(
+                        project_root=working_dir,
+                        task_id=task_id,
+                    )
+                    working_dir = str(worktree_path)
+                    if model:
+                        model.worktree_path = working_dir
+                except Exception as exc:
+                    logger.warning("Could not create worktree, falling back to project root: %s", exc)
+
+            # Update status to RUNNING
+            if model:
+                model.status = TaskStatus.RUNNING.value
+                model.assigned_agent = agent_type.value
+                model.updated_at = datetime.utcnow()
+
+            # Record AgentRunModel
+            run_model = AgentRunModel(
+                id=run_id,
+                task_id=task_id,
+                agent_type=agent_type.value,
+                status="RUNNING",
+            )
+            session.add(run_model)
+
+        req = AgentExecutionRequest(
+            task_id=task_id,
+            run_id=run_id,
+            prompt=task.description,
+            working_directory=working_dir,
+            worktree_name=worktree_path.name if worktree_path else None,
+            policy_mode=task.policy_mode,
+            timeout_seconds=task.metadata.get("timeout_seconds", 3600),
+            context_files=task.metadata.get("context_files", []),
+        )
+
+        # Dispatch execution
+        result = adapter.execute(req)
+
+        # Update run and task records
+        with get_db_session() as session:
+            run_record = session.query(AgentRunModel).filter_by(id=run_id).first()
+            if run_record:
+                run_record.status = result.status.value
+                run_record.exit_code = result.exit_code
+                run_record.stdout = result.stdout
+                run_record.stderr = result.stderr
+                run_record.duration_seconds = result.duration_seconds
+                run_record.error_reason = result.error_reason
+                run_record.completed_at = datetime.utcnow()
+
+            task_record = session.query(TaskModel).filter_by(id=task_id).first()
+            if task_record:
+                task_record.status = result.status.value
+                task_record.updated_at = datetime.utcnow()
+                if result.status == TaskStatus.COMPLETED:
+                    task_record.completed_at = datetime.utcnow()
+
+            # Audit record
+            audit = AuditLogModel(
+                task_id=task_id,
+                run_id=run_id,
+                event_type="TASK_FINISHED",
+                message=f"Agent {agent_type.value} exited with status {result.status.value} (code {result.exit_code})",
+            )
+            session.add(audit)
+
+        return result
