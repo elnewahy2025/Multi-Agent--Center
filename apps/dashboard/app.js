@@ -3,6 +3,26 @@
  */
 
 const API_BASE = "http://127.0.0.1:8000";
+const AGENT_META = {
+  ANTIGRAVITY: { short: "Antigravity", full: "Google Antigravity", icon: "🟣", pillClass: "agent-pill-ANTIGRAVITY", bubbleClass: "msg-antigravity" },
+  OPENCODE: { short: "OpenCode", full: "OpenCode Desktop", icon: "🟢", pillClass: "agent-pill-OPENCODE", bubbleClass: "msg-opencode" },
+  CLAUDE_CODE: { short: "Claude Code", full: "Claude Code CLI", icon: "🟠", pillClass: "agent-pill-CLAUDE_CODE", bubbleClass: "msg-claude" },
+  QWEN_CODE: { short: "Qwen Code", full: "Qwen Code CLI", icon: "🔵", pillClass: "agent-pill-QWEN_CODE", bubbleClass: "msg-qwen" },
+  CODEX: { short: "Codex", full: "OpenAI Codex", icon: "⚪", pillClass: "agent-pill-OTHER", bubbleClass: "msg-opencode" },
+  OPENCLAW: { short: "OpenClaw", full: "OpenClaw", icon: "🦅", pillClass: "agent-pill-OTHER", bubbleClass: "msg-opencode" },
+  SYSTEM: { short: "System", full: "Command Center", icon: "⚖️", pillClass: "agent-pill-OTHER", bubbleClass: "msg-opencode" },
+};
+
+function getAgentMeta(agentKey) {
+  return AGENT_META[agentKey] || {
+    short: agentKey || "Agent",
+    full: agentKey || "Agent",
+    icon: "🤖",
+    pillClass: "agent-pill-OTHER",
+    bubbleClass: "msg-opencode",
+  };
+}
+
 let activeModalTaskId = null;
 let lastRenderedTaskId = null;
 let currentModalTab = "chat";
@@ -187,7 +207,7 @@ async function fetchTasks() {
             <strong>${escapeHtml(t.title)}</strong>
             <div style="font-size:0.73rem; color:var(--text-muted); max-width:340px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${escapeHtml(t.description)}">${escapeHtml(t.description)}</div>
           </td>
-          <td>${t.assigned_agent || "Antigravity + OpenCode"}</td>
+          <td>${t.assigned_agent ? `${getAgentMeta(t.assigned_agent).icon} ${escapeHtml(getAgentMeta(t.assigned_agent).short)}` : "🟣 Antigravity ↔ 🟢 OpenCode"}</td>
           <td><span class="status-badge status-${t.status}">${t.status}</span></td>
           <td style="font-size:0.75rem; color:var(--text-muted);">${t.worktree_path ? escapeHtml(t.worktree_path.split('\\\\').pop().split('/').pop()) : 'Root'}</td>
           <td style="font-size:0.75rem;">${new Date(t.created_at).toLocaleTimeString()}</td>
@@ -337,9 +357,8 @@ function viewTaskFiles(taskId) {
 }
 
 function agentBadgeHtml(agentName) {
-  if (agentName === "ANTIGRAVITY") return `<span class="agent-pill agent-pill-ANTIGRAVITY">🟣 Antigravity</span>`;
-  if (agentName === "OPENCODE") return `<span class="agent-pill agent-pill-OPENCODE">🟢 OpenCode</span>`;
-  return `<span class="agent-pill agent-pill-OTHER">🤖 ${escapeHtml(agentName || "Agent")}</span>`;
+  const m = getAgentMeta(agentName);
+  return `<span class="agent-pill ${m.pillClass}">${m.icon} ${escapeHtml(m.short)}</span>`;
 }
 
 function renderStageStepper(workflow) {
@@ -351,11 +370,13 @@ function renderStageStepper(workflow) {
     return;
   }
   stepper.style.display = "grid";
+  const inspector = getAgentMeta(workflow.inspector_agent || "ANTIGRAVITY");
+  const worker = getAgentMeta(workflow.worker_agent || "OPENCODE");
   const stages = [
-    { key: "INSPECTION", label: "1. Inspection (Antigravity)" },
-    { key: "NEGOTIATION", label: "2. Negotiation (OpenCode)" },
-    { key: "EXECUTION", label: "3. Execution (Worktree)" },
-    { key: "VERIFICATION", label: "4. Verification (Sign-off)" },
+    { key: "INSPECTION", label: `1. Inspection (${inspector.short})` },
+    { key: "NEGOTIATION", label: `2. Negotiation (${worker.short})` },
+    { key: "EXECUTION", label: `3. Execution (${worker.short})` },
+    { key: "VERIFICATION", label: `4. Verification (${inspector.short})` },
   ];
   const order = ["INSPECTION", "NEGOTIATION", "EXECUTION", "VERIFICATION", "COMPLETED"];
   const curIdx = order.indexOf(workflow.current_phase);
@@ -531,9 +552,11 @@ async function loadTaskDetails(taskId) {
     }
 
     if (workflow) {
-      document.getElementById("modalTitle").textContent = "Bilateral Teamwork: Antigravity ↔ OpenCode";
+      const inspector = getAgentMeta(workflow.inspector_agent || "ANTIGRAVITY");
+      const worker = getAgentMeta(workflow.worker_agent || "OPENCODE");
+      document.getElementById("modalTitle").textContent = `Bilateral Teamwork: ${inspector.short} ↔ ${worker.short}`;
       const verifyHtml = workflow.is_verified
-        ? '<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by Antigravity</span>'
+        ? `<span style="color:#3fb950; font-weight:600;">✓ 100% Certified by ${escapeHtml(inspector.short)}</span>`
         : (workflow.status === "FAILED"
             ? '<span style="color:#f85149; font-weight:600;">✕ Rejected / Failed</span>'
             : (workflow.status === "CANCELLED"
@@ -558,12 +581,14 @@ async function loadTaskDetails(taskId) {
       if (workflow.messages && workflow.messages.length > 0) {
         let html = alertHtml + `<div class="files-section-heading">Completed Stage Summaries</div>`;
         workflow.messages.forEach((msg) => {
-          const isAntigravity = msg.sender === "ANTIGRAVITY";
-          const bubbleClass = isAntigravity ? "msg-antigravity" : "msg-opencode";
-          const roleLabel = isAntigravity ? "🟣 Google Antigravity (Architect / Quality Reviewer)" : "🟢 OpenCode Desktop (Implementer / Worker)";
+          const senderMeta = getAgentMeta(msg.sender);
+          const roleText = msg.sender === workflow.inspector_agent
+            ? "Architect / Quality Reviewer"
+            : "Negotiator / Implementer";
+          const roleLabel = `${senderMeta.icon} ${escapeHtml(senderMeta.full)} (${roleText})`;
 
           html += `
-            <div class="msg-bubble ${bubbleClass}">
+            <div class="msg-bubble ${senderMeta.bubbleClass}">
               <div class="msg-header">
                 <span>${roleLabel}</span>
                 <span class="phase-badge">${msg.phase}</span>

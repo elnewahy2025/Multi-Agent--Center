@@ -48,6 +48,27 @@ logger = logging.getLogger("orchestrator.collaborative")
 class CollaborativeWorkflowEngine:
     """Orchestrates bilateral negotiation, isolated execution, and verification rework."""
 
+    AGENT_NAMES = {
+        AgentType.ANTIGRAVITY: "Google Antigravity",
+        AgentType.OPENCODE: "OpenCode Desktop",
+        AgentType.CLAUDE_CODE: "Claude Code",
+        AgentType.QWEN_CODE: "Qwen Code",
+        AgentType.CODEX: "OpenAI Codex",
+        AgentType.OPENCLAW: "OpenClaw",
+    }
+
+    @classmethod
+    def resolve_pair_types(cls, assigned_agent: Optional[str]) -> Tuple[AgentType, AgentType]:
+        """Resolve (inspector_type, worker_type); selected agent is always Negotiator & Implementer."""
+        worker_type = AgentType.OPENCODE
+        if assigned_agent:
+            try:
+                worker_type = AgentType(assigned_agent)
+            except ValueError:
+                worker_type = AgentType.OPENCODE
+        inspector_type = AgentType.OPENCODE if worker_type == AgentType.ANTIGRAVITY else AgentType.ANTIGRAVITY
+        return inspector_type, worker_type
+
     def __init__(
         self,
         registry: Optional[AgentRegistry] = None,
@@ -373,6 +394,9 @@ class CollaborativeWorkflowEngine:
                 raise ValueError(f"Task not found: {task_id}")
             task_title, task_desc = task.title, task.description
             task_policy = PolicyMode(task.policy_mode)
+            inspector_type, worker_type = self.resolve_pair_types(task.assigned_agent)
+            inspector_name = self.AGENT_NAMES.get(inspector_type, inspector_type.value)
+            worker_name = self.AGENT_NAMES.get(worker_type, worker_type.value)
             project_root = (
                 task.project.root_path
                 if (task.project and task.project.root_path)
@@ -385,27 +409,27 @@ class CollaborativeWorkflowEngine:
             task.status, task.updated_at = TaskStatus.RUNNING.value, now
             session.add(AuditLogModel(
                 task_id=task_id, event_type="WORKFLOW_STARTED",
-                message="Collaborative bilateral workflow initiated (Antigravity <-> OpenCode)",
+                message=f"Collaborative bilateral workflow initiated ({inspector_name} <-> {worker_name})",
             ))
 
-        antigravity_adapter = self.registry.get_adapter(AgentType.ANTIGRAVITY)
-        opencode_adapter = self.registry.get_adapter(AgentType.OPENCODE)
-        if not antigravity_adapter or not opencode_adapter:
-            raise RuntimeError("Both Antigravity and OpenCode adapters must be available for collaboration.")
+        inspector_adapter = self.registry.get_adapter(inspector_type)
+        worker_adapter = self.registry.get_adapter(worker_type)
+        if not inspector_adapter or not worker_adapter:
+            raise RuntimeError(f"Both {inspector_name} and {worker_name} adapters must be available for collaboration.")
 
         worktree_dir = self._allocate_worktree(project_root, task_id)
 
-        # STAGE 1: READ-ONLY INSPECTION & PROPOSAL (Antigravity)
+        # STAGE 1: READ-ONLY INSPECTION & PROPOSAL (Inspector)
         proposal_text = self._run_stage(
-            workflow_id, task_id, antigravity_adapter, AgentType.OPENCODE,
+            workflow_id, task_id, inspector_adapter, worker_type,
             WorkflowPhase.INSPECTION, "Stage 1 Inspection",
             AgentExecutionRequest(
                 task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                 prompt=(
-                    f"You are the Lead Architect inspecting task: '{task_title}'.\n"
+                    f"You are {inspector_name}, the Lead Architect inspecting task: '{task_title}'.\n"
                     f"Requirements:\n{task_desc}\n\n"
                     "Analyze the codebase requirements and formulate a structured, concise technical proposal "
-                    "and execution plan for OpenCode to review.\n"
+                    f"and execution plan for {worker_name} to review.\n"
                     "If your plan includes any dangerous, destructive, or high-impact actions that require human "
                     "confirmation before execution, include the line 'APPROVAL_REQUIRED: YES' and explain why.\n"
                     "IMPORTANT: This is Stage 1 (read-only inspection). Do NOT modify, create, or delete any files."
@@ -417,14 +441,14 @@ class CollaborativeWorkflowEngine:
         if proposal_text is None:
             return self.get_workflow_run(workflow_id)  # type: ignore
 
-        # STAGE 2: READ-ONLY PEER REVIEW & NEGOTIATION (OpenCode)
+        # STAGE 2: READ-ONLY PEER REVIEW & NEGOTIATION (Selected Worker Agent)
         negotiation_text = self._run_stage(
-            workflow_id, task_id, opencode_adapter, AgentType.ANTIGRAVITY,
+            workflow_id, task_id, worker_adapter, inspector_type,
             WorkflowPhase.NEGOTIATION, "Stage 2 Peer Review",
             AgentExecutionRequest(
                 task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                 prompt=(
-                    f"Antigravity has proposed the following technical plan for task '{task_title}':\n"
+                    f"{inspector_name} has proposed the following technical plan for task '{task_title}':\n"
                     f"---\n{proposal_text}\n---\n\n"
                     "Review this plan. Do you agree with these steps, or do you have refinements or critiques?\n"
                     "If your plan includes any dangerous, destructive, or high-impact actions that require human "
@@ -449,7 +473,7 @@ class CollaborativeWorkflowEngine:
             if decision != ApprovalDecision.APPROVED:
                 halt_msg = f"🛑 Execution halted: Operator denied pre-execution approval ({user_note or decision.value})."
                 self._record_message(
-                    workflow_id, AgentType.ANTIGRAVITY, AgentType.OPENCODE, WorkflowPhase.NEGOTIATION, halt_msg,
+                    workflow_id, inspector_type, worker_type, WorkflowPhase.NEGOTIATION, halt_msg,
                 )
                 self._update_phase(workflow_id, WorkflowPhase.FAILED if user_note == "Approval timed out" else WorkflowPhase.NEGOTIATION,
                                    status="FAILED" if user_note == "Approval timed out" else "CANCELLED",
@@ -468,7 +492,7 @@ class CollaborativeWorkflowEngine:
         while True:
             if attempt == 1:
                 execution_prompt = (
-                    f"Consensus reached between Antigravity and OpenCode for '{task_title}'.\n"
+                    f"Consensus reached between {inspector_name} and {worker_name} for '{task_title}'.\n"
                     f"Execute the agreed plan directly inside the current working directory ({worktree_dir}):\n"
                     f"---\n{negotiation_text}\n---\n"
                     "Implement all required code changes, checks, and updates in this directory. "
@@ -476,16 +500,16 @@ class CollaborativeWorkflowEngine:
                 )
             else:
                 execution_prompt = (
-                    f"Antigravity inspected your previous execution for '{task_title}' (Attempt {attempt - 1}) "
+                    f"{inspector_name} inspected your previous execution for '{task_title}' (Attempt {attempt - 1}) "
                     f"and REJECTED it with the following verification findings:\n"
                     f"---\n{last_verification_text}\n---\n\n"
                     f"Original Agreed Plan:\n---\n{negotiation_text}\n---\n\n"
-                    f"Fix every issue reported by Antigravity directly inside the current working directory ({worktree_dir}). "
+                    f"Fix every issue reported by {inspector_name} directly inside the current working directory ({worktree_dir}). "
                     "Do not create or use any other worktree path."
                 )
 
             execution_text = self._run_stage(
-                workflow_id, task_id, opencode_adapter, AgentType.ANTIGRAVITY,
+                workflow_id, task_id, worker_adapter, inspector_type,
                 WorkflowPhase.EXECUTION, f"Stage 3 Execution (Attempt {attempt})",
                 AgentExecutionRequest(
                     task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
@@ -498,21 +522,21 @@ class CollaborativeWorkflowEngine:
 
             changes_summary = self._collect_worktree_changes_summary(worktree_dir)
             verification_text = self._run_stage(
-                workflow_id, task_id, antigravity_adapter, AgentType.OPENCODE,
+                workflow_id, task_id, inspector_adapter, worker_type,
                 WorkflowPhase.VERIFICATION, f"Stage 4 Verification (Attempt {attempt})",
                 AgentExecutionRequest(
                     task_id=task_id, run_id=f"run_{uuid.uuid4().hex[:8]}",
                     prompt=(
-                        f"OpenCode has finished executing task '{task_title}' (Attempt {attempt}/{self.max_attempts}) "
+                        f"{worker_name} has finished executing task '{task_title}' (Attempt {attempt}/{self.max_attempts}) "
                         f"in working directory: {worktree_dir}\n\n"
                         f"Worktree Git Changes & Untracked Files:\n{changes_summary}\n\n"
-                        f"OpenCode Execution Summary:\n{execution_text[:2000]}\n\n"
+                        f"{worker_name} Execution Summary:\n{execution_text[:2000]}\n\n"
                         "Inspect the actual files in this working directory and verify whether the implementation is "
                         "100% accurate, complete, and free of regressions. Do NOT modify files yourself.\n"
                         "You MUST include an explicit verdict line in your report:\n"
                         "- Write `VERDICT: APPROVED` if all requirements are satisfied and verified in this working directory.\n"
                         "- Write `VERDICT: REJECTED` if any requirement is missing, broken, or failed verification, "
-                        "followed by the exact list of fixes OpenCode must make."
+                        f"followed by the exact list of fixes {worker_name} must make."
                     ),
                     working_directory=worktree_dir, worktree_name=None,
                     policy_mode=PolicyMode.STRICT, timeout_seconds=300,
@@ -533,7 +557,7 @@ class CollaborativeWorkflowEngine:
                         t_done.worktree_path = worktree_dir
                     session.add(AuditLogModel(
                         task_id=task_id, event_type="WORKFLOW_COMPLETED",
-                        message=f"Collaborative bilateral workflow approved by Antigravity (Attempt {attempt}).",
+                        message=f"Collaborative bilateral workflow approved by {inspector_name} (Attempt {attempt}).",
                     ))
                 return self.get_workflow_run(workflow_id)  # type: ignore
 
@@ -542,7 +566,7 @@ class CollaborativeWorkflowEngine:
                 with get_db_session() as session:
                     session.add(AuditLogModel(
                         task_id=task_id, run_id=workflow_id, event_type="WORKFLOW_REWORK_REQUESTED",
-                        message=f"Antigravity rejected attempt {attempt}/{self.max_attempts}; returning to OpenCode for fixes.",
+                        message=f"{inspector_name} rejected attempt {attempt}/{self.max_attempts}; returning to {worker_name} for fixes.",
                     ))
                 attempt += 1
                 continue
@@ -550,7 +574,7 @@ class CollaborativeWorkflowEngine:
             if not operator_granted_extra:
                 decision, user_note = self._request_and_wait_for_approval(
                     task_id, workflow_id, "UNRESOLVED_ISSUES_DECISION",
-                    f"Antigravity still reported unresolved issues after {attempt} attempt(s). "
+                    f"{inspector_name} still reported unresolved issues after {attempt} attempt(s). "
                     "Approve (with optional instructions) to run another fix cycle, or Deny to stop.",
                     worktree_dir, "HIGH",
                 )
@@ -564,9 +588,9 @@ class CollaborativeWorkflowEngine:
                     return self.get_workflow_run(workflow_id)  # type: ignore
 
             self._record_error(
-                task_id, workflow_id, "ANTIGRAVITY_VERIFICATION",
+                task_id, workflow_id, f"{inspector_type.value}_VERIFICATION",
                 f"Verification Rejected After {attempt} Attempts",
-                "Antigravity rejected the implementation. Inspect the task verification report for required fixes.",
+                f"{inspector_name} rejected the implementation. Inspect the task verification report for required fixes.",
                 stderr=verification_text[:2000], severity="ERROR",
             )
             self._fail_workflow(workflow_id, task_id, verification_text)
@@ -578,16 +602,26 @@ class CollaborativeWorkflowEngine:
             wf = session.query(WorkflowRunModel).filter_by(id=workflow_id).first()
             if not wf:
                 return None
-            messages = [
-                WorkflowMessage(
-                    id=m.id, sender=AgentType(m.sender), recipient=AgentType(m.recipient),
-                    phase=WorkflowPhase(m.phase), content=m.content, created_at=m.created_at,
-                )
-                for m in wf.messages
-            ]
+            inspector_type, worker_type = self.resolve_pair_types(
+                wf.task.assigned_agent if wf.task else None
+            )
+            messages = []
+            for m in wf.messages:
+                sender = AgentType(m.sender)
+                phase = WorkflowPhase(m.phase)
+                if phase == WorkflowPhase.INSPECTION:
+                    inspector_type = sender
+                elif phase == WorkflowPhase.NEGOTIATION and sender != inspector_type:
+                    worker_type = sender
+                messages.append(WorkflowMessage(
+                    id=m.id, sender=sender, recipient=AgentType(m.recipient),
+                    phase=phase, content=m.content, created_at=m.created_at,
+                ))
             return WorkflowRunRead(
                 id=wf.id, task_id=wf.task_id, status=wf.status,
-                current_phase=WorkflowPhase(wf.current_phase), is_verified=wf.is_verified,
+                current_phase=WorkflowPhase(wf.current_phase),
+                inspector_agent=inspector_type, worker_agent=worker_type,
+                is_verified=wf.is_verified,
                 verification_report=wf.verification_report, messages=messages,
                 created_at=wf.created_at, updated_at=wf.updated_at,
             )

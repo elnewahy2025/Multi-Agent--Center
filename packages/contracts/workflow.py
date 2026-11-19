@@ -36,6 +36,8 @@ class WorkflowRunRead(BaseModel):
     task_id: str
     status: str
     current_phase: WorkflowPhase
+    inspector_agent: AgentType = Field(AgentType.ANTIGRAVITY, description="Lead Architect / Inspector agent")
+    worker_agent: AgentType = Field(AgentType.OPENCODE, description="Negotiator / Implementer agent")
     is_verified: bool
     verification_report: Optional[str] = None
     messages: List[WorkflowMessage] = Field(default_factory=list)

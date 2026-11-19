@@ -251,16 +251,19 @@ def get_task_files(task_id: str) -> Dict[str, Any]:
 
 @app.post("/tasks/{task_id}/collaborate")
 def collaborate_task(task_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-    """Trigger bilateral collaborative workflow (Antigravity <-> OpenCode) in the background."""
+    """Trigger bilateral collaborative workflow in the background using selected agent pairing."""
     task = orchestrator.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    inspector_type, worker_type = collab_engine.resolve_pair_types(
+        task.assigned_agent.value if task.assigned_agent else None
+    )
     background_tasks.add_task(collab_engine.run_collaborative_workflow, task_id)
     return {
         "status": "RUNNING",
         "task_id": task_id,
-        "workflow": "Antigravity <-> OpenCode Bilateral Collaboration",
+        "workflow": f"{inspector_type.value} <-> {worker_type.value} Bilateral Collaboration",
         "message": "Collaborative inspection and negotiation initiated",
     }
 
