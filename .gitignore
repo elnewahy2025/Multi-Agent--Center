@@ -20,6 +20,8 @@ pip-delete-this-directory.txt
 data/*.db
 data/*.sqlite
 data/*.log
+data/uploads/*
+!data/uploads/.gitkeep
 workspace/worktrees/*
 !workspace/worktrees/.gitkeep
 workspace/projects/*

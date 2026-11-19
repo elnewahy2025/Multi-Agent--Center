@@ -1,13 +1,18 @@
 """FastAPI application for the AI Coding Command Center."""
 
+import base64
 import json
 import os
+import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from packages.contracts import (
     AgentDescriptor,
@@ -680,8 +685,99 @@ def pick_native_path(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"mode": mode, "paths": json.loads(last_line)}
 
 
+_IMAGE_MIME_TO_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+_EXT_TO_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+_IMAGE_DATA_URL_RE = re.compile(r"^data:(image/(?:png|jpeg|jpg|webp|gif));base64,(.+)$", re.IGNORECASE | re.DOTALL)
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+class ImageUploadPayload(BaseModel):
+    """Payload for attaching a screenshot or reference image to a task."""
+
+    filename: Optional[str] = None
+    data_url: str
+
+
+def _uploads_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[2].resolve()
+    target = (repo_root / "data" / "uploads").resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _sanitize_image_stem(raw_name: Optional[str]) -> str:
+    stem = Path(raw_name or "image").stem
+    cleaned = re.sub(r"[^a-zA-Z0-9-]+", "-", stem).strip("-").lower()
+    return (cleaned[:48] or "image")
+
+
+@app.post("/uploads/image")
+def upload_image(payload: ImageUploadPayload) -> Dict[str, Any]:
+    """Save a validated reference image into data/uploads/ and return its path and URL."""
+    match = _IMAGE_DATA_URL_RE.match((payload.data_url or "").strip())
+    if not match:
+        raise HTTPException(status_code=400, detail="Only PNG, JPEG, WebP, or GIF base64 image data URLs are supported.")
+
+    mime = match.group(1).lower()
+    ext = _IMAGE_MIME_TO_EXT.get(mime)
+    if not ext:
+        raise HTTPException(status_code=400, detail="Unsupported image format.")
+
+    try:
+        raw_bytes = base64.b64decode(match.group(2), validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid base64 image encoding.") from exc
+
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty.")
+    if len(raw_bytes) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds the 10 MB limit.")
+
+    uploads_dir = _uploads_dir()
+    stem = _sanitize_image_stem(payload.filename)
+    saved_name = f"{uuid.uuid4().hex[:10]}-{stem}{ext}"
+    saved_path = (uploads_dir / saved_name).resolve()
+    saved_path.write_bytes(raw_bytes)
+
+    return {
+        "filename": saved_name,
+        "original_name": payload.filename or saved_name,
+        "path": str(saved_path),
+        "url": f"/uploads/{saved_name}",
+        "size": len(raw_bytes),
+    }
+
+
+@app.get("/uploads/{filename}")
+def get_uploaded_image(filename: str):
+    """Serve a previously uploaded image by validated basename."""
+    if Path(filename).name != filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid upload filename.")
+    ext = Path(filename).suffix.lower()
+    media_type = _EXT_TO_IMAGE_MIME.get(ext)
+    if not media_type:
+        raise HTTPException(status_code=400, detail="Unsupported upload file extension.")
+
+    uploads_dir = _uploads_dir()
+    candidate = (uploads_dir / filename).resolve()
+    if candidate.parent != uploads_dir or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Uploaded image not found.")
+    return FileResponse(path=str(candidate), media_type=media_type)
+
+
 # Mount the operator dashboard static UI at root
-from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 
 dashboard_dir = Path(__file__).resolve().parents[2] / "apps" / "dashboard"
