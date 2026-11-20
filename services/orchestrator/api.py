@@ -451,6 +451,108 @@ def get_diagnostics() -> Dict[str, Any]:
     }
 
 
+def _run_git_readonly(target_dir: Path, args: List[str]) -> subprocess.CompletedProcess:
+    """Run a fast, read-only git command inside target_dir."""
+    return subprocess.run(
+        ["git", "-C", str(target_dir), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=5,
+    )
+
+
+@app.get("/repo/status")
+def get_repo_status(path: Optional[str] = None) -> Dict[str, Any]:
+    """Return live Git branch, working tree status, recent commits, and worktrees."""
+    repo_root = Path(__file__).resolve().parents[2].resolve()
+    target_dir = _resolve_browse_dir(path, repo_root)
+
+    try:
+        inside = _run_git_readonly(target_dir, ["rev-parse", "--is-inside-work-tree"])
+        is_git = inside.returncode == 0 and inside.stdout.strip().lower() == "true"
+    except Exception:
+        is_git = False
+
+    if not is_git:
+        return {
+            "root": str(target_dir),
+            "name": target_dir.name or str(target_dir),
+            "is_git_repo": False,
+            "branch": None,
+            "clean": True,
+            "uncommitted_count": 0,
+            "uncommitted_files": [],
+            "latest_commit": None,
+            "recent_commits": [],
+            "worktrees": [],
+        }
+
+    branch_res = _run_git_readonly(target_dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+    branch = branch_res.stdout.strip() if branch_res.returncode == 0 else "HEAD"
+
+    status_res = _run_git_readonly(target_dir, ["status", "--porcelain=v1"])
+    uncommitted: List[Dict[str, str]] = []
+    if status_res.returncode == 0:
+        for line in status_res.stdout.splitlines():
+            if not line.strip():
+                continue
+            code = line[:2].strip() or "M"
+            rel_path = line[3:].strip()
+            uncommitted.append({"status": code, "path": rel_path})
+
+    log_res = _run_git_readonly(target_dir, ["log", "-n", "6", "--format=%h%x1f%s%x1f%cr"])
+    recent_commits: List[Dict[str, str]] = []
+    if log_res.returncode == 0:
+        for line in log_res.stdout.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) == 3:
+                recent_commits.append({
+                    "hash": parts[0].strip(),
+                    "subject": parts[1].strip(),
+                    "relative_time": parts[2].strip(),
+                })
+
+    wt_res = _run_git_readonly(target_dir, ["worktree", "list", "--porcelain"])
+    worktrees: List[Dict[str, str]] = []
+    if wt_res.returncode == 0:
+        current: Dict[str, Any] = {}
+        for line in wt_res.stdout.splitlines() + [""]:
+            if not line.strip():
+                if current.get("path") and not current.get("prunable"):
+                    worktrees.append({
+                        "path": str(current["path"]),
+                        "head": str(current.get("head", ""))[:7],
+                        "branch": str(current.get("branch", "detached")),
+                    })
+                current = {}
+            elif line.startswith("worktree "):
+                current["path"] = line[len("worktree "):].strip()
+            elif line.startswith("HEAD "):
+                current["head"] = line[len("HEAD "):].strip()
+            elif line.startswith("branch "):
+                ref = line[len("branch "):].strip()
+                current["branch"] = ref.replace("refs/heads/", "")
+            elif line.startswith("detached"):
+                current["branch"] = "detached HEAD"
+            elif line.startswith("prunable"):
+                current["prunable"] = True
+
+    return {
+        "root": str(target_dir),
+        "name": target_dir.name or str(target_dir),
+        "is_git_repo": True,
+        "branch": branch,
+        "clean": len(uncommitted) == 0,
+        "uncommitted_count": len(uncommitted),
+        "uncommitted_files": uncommitted[:30],
+        "latest_commit": recent_commits[0] if recent_commits else None,
+        "recent_commits": recent_commits,
+        "worktrees": worktrees,
+    }
+
+
 @app.get("/fs/list")
 def list_workspace_paths(root: Optional[str] = None, limit: int = 300) -> Dict[str, Any]:
     """List project files and folders for the dashboard file/directory selector."""

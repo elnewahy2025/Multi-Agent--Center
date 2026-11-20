@@ -215,6 +215,16 @@ class TestOrchestrator(unittest.TestCase):
         missing_get = self.client.get("/uploads/does-not-exist.png")
         self.assertEqual(missing_get.status_code, 404)
 
+    def test_repo_status_endpoint(self):
+        res = self.client.get("/repo/status")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["is_git_repo"])
+        self.assertTrue(bool(data["branch"]))
+        self.assertIsNotNone(data["latest_commit"])
+        self.assertIsInstance(data["worktrees"], list)
+        self.assertGreaterEqual(len(data["worktrees"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

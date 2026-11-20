@@ -1,305 +1,912 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0b0f14">
-  <title>AI Coding Command Center</title>
-  <link rel="stylesheet" href="styles.css?v=20261119g">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" id="metaThemeColor" content="#0a1020">
+  <title>Pairwise | AI Coding Command Center</title>
+  <link rel="stylesheet" href="styles.css?v=20261120p">
 </head>
 <body>
-  <a href="#workspaceMain" class="skip-link visually-hidden">Skip to workspace</a>
+  <a href="#mainContent" class="skip-link visually-hidden">Skip to workspace</a>
   <div id="statusAnnouncer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
 
-  <!-- Row 1: Top Navigation & Detected Coding Agents Bar -->
-  <header class="topbar">
-    <div class="topbar-main">
-      <div class="topbar-brand">
-        <span class="brand-mark" aria-hidden="true">⚡</span>
-        <h1 class="brand-title">AI Coding Command Center</h1>
+  <div class="app">
+    <!-- Persistent Left Sidebar -->
+    <aside class="sidebar" aria-label="Primary Sidebar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">P</div>
+        <div>
+          <span class="brand-name">Pairwise</span>
+          <small>AI Coding Command Center</small>
+        </div>
       </div>
 
-      <div class="topbar-utilities">
-        <span class="status-pill status-healthy" id="dbStatus">DB: Connecting…</span>
-        <span class="status-pill status-healthy" id="errorPill">Errors: 0</span>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnOpenHistory">
-          History <span class="count-pill" id="historyCount">0</span>
+      <div>
+        <div class="section-label">Workspace</div>
+        <button type="button" class="project-btn" id="projectSwitch" aria-label="Change active project folder">
+          <span class="project-btn-name">◈ &nbsp;<span id="sidebarProjectName">AI-Coding-Command-Center</span></span>
+          <span aria-hidden="true">⌄</span>
         </button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnOpenFiles">
-          Files <span class="count-pill" id="headerFilesCount">0</span>
-        </button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnOpenAudit">Audit</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnRefresh" aria-label="Refresh dashboard status">↻ Refresh</button>
       </div>
-    </div>
 
-    <div class="agents-strip" aria-label="Detected Coding Agents">
-      <span class="strip-label">Detected Coding Agents <span class="count-pill" id="agentsCount">0</span></span>
-      <div class="agents-pill-list" id="agentsGrid">
-        <span class="agent-chip-loading">Scanning host agents…</span>
+      <div>
+        <div class="section-label">Command center</div>
+        <nav class="nav" id="sideNav" aria-label="Command center">
+          <button type="button" class="active" data-view="overview" aria-current="page">
+            <span class="ico" aria-hidden="true">▦</span><span>Overview</span>
+          </button>
+          <button type="button" data-view="tasks">
+            <span class="ico" aria-hidden="true">☷</span><span>Tasks</span>
+            <span class="nav-count" id="navTasksCount">0</span>
+          </button>
+          <button type="button" data-view="agents">
+            <span class="ico" aria-hidden="true">◎</span><span>Agents</span>
+            <span class="nav-count" id="navAgentsCount">0</span>
+          </button>
+          <button type="button" data-view="reviews">
+            <span class="ico" aria-hidden="true">◇</span><span>Code reviews</span>
+            <span class="nav-count nav-count-warn" id="navReviewsCount">0</span>
+          </button>
+          <button type="button" data-view="activity">
+            <span class="ico" aria-hidden="true">◷</span><span>Errors &amp; activity</span>
+            <span class="nav-count nav-count-err" id="navErrorsCount">0</span>
+          </button>
+        </nav>
       </div>
-    </div>
-  </header>
 
-  <main id="workspaceMain" class="cockpit" tabindex="-1">
-    <!-- Row 2: Unified Composer (Left: Add Files/Folders + Add Images | Right: Prompt Text Area) -->
-    <section class="composer-section" aria-label="Task Composer">
-      <form id="taskForm" class="composer-grid" novalidate>
-        <!-- Left Box: Add Files/Folders Area + Add Images -->
-        <div class="panel-card composer-attach-card" id="attachmentsPanel">
-          <div class="attach-group">
-            <div class="attach-header">
-              <span class="micro-label">Add Files / Folders Area</span>
-              <div class="attach-btn-row">
-                <button type="button" class="btn btn-subtle btn-sm scope-mode-btn active" id="btnScopeFolder">📁 Folder…</button>
-                <button type="button" class="btn btn-subtle btn-sm scope-mode-btn" id="btnScopeFiles">📄 Files…</button>
+      <div>
+        <div class="section-label">Development</div>
+        <nav class="nav" aria-label="Development">
+          <button type="button" data-view="messages">
+            <span class="ico" aria-hidden="true">↔</span><span>Live streams</span>
+          </button>
+          <button type="button" data-view="repository">
+            <span class="ico" aria-hidden="true">⌘</span><span>Repository</span>
+          </button>
+          <button type="button" data-view="tests">
+            <span class="ico" aria-hidden="true">✓</span><span>Diagnostics</span>
+          </button>
+        </nav>
+      </div>
+
+      <div>
+        <div class="section-label">Preferences</div>
+        <nav class="nav" aria-label="Workspace settings">
+          <button type="button" data-view="settings">
+            <span class="ico" aria-hidden="true">⚙</span><span>Settings</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="side-bottom">
+        <div class="connect-card">
+          <div class="connect-head">
+            <span>AGENT CONNECTIONS</span>
+            <span class="live" id="sidebarLiveLabel">● LIVE</span>
+          </div>
+          <div id="sidebarConnectionsList" class="connect-list">
+            <div class="connect-line"><span>Scanning CLIs…</span><span>…</span></div>
+          </div>
+        </div>
+        <div class="user-card">
+          <div class="avatar" aria-hidden="true">CC</div>
+          <div class="user-meta">
+            <span class="user-name">Ahmed</span>
+            <small id="dbStatus">DB: Connecting…</small>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Column -->
+    <main id="mainContent" tabindex="-1">
+      <header class="topbar">
+        <div class="crumb">Workspace / <strong id="crumb">Overview</strong></div>
+        <div class="top-actions">
+          <button type="button" class="btn sync-label" id="syncBtn">↻ &nbsp;Sync status</button>
+          <button type="button" class="btn" id="errorPillBtn" aria-label="View active errors">
+            Errors: <span id="errorPillCount">0</span>
+          </button>
+          <button type="button" class="btn primary" id="newTaskBtn">＋ New task</button>
+        </div>
+      </header>
+
+      <div class="heading">
+        <div>
+          <h1 id="pageTitle">Good evening. Let&rsquo;s build.</h1>
+          <p class="sub" id="pageSub">Your host agents are detected and ready to collaborate.</p>
+        </div>
+        <span class="pill" id="systemStatus">● &nbsp; All systems operational</span>
+      </div>
+
+      <!-- VIEW 1: OVERVIEW -->
+      <section class="view active" id="view-overview" aria-label="Overview">
+        <div class="grid stats">
+          <div class="stat">
+            <div class="stat-label"><span>Active &amp; Queued</span><span aria-hidden="true">☷</span></div>
+            <div class="stat-value" id="statActive">00</div>
+            <div class="stat-foot" id="statActiveFoot">0 running · 0 awaiting decision</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label"><span>Completed Runs</span><span aria-hidden="true">✓</span></div>
+            <div class="stat-value" id="statCompleted">00</div>
+            <div class="stat-foot" id="statCompletedFoot">0 total tasks recorded</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label"><span>Detected CLIs</span><span aria-hidden="true">◎</span></div>
+            <div class="stat-value" id="statAgents">00</div>
+            <div class="stat-foot" id="statAgentsFoot">Scanning local adapters…</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label"><span>System Health</span><span aria-hidden="true">✦</span></div>
+            <div class="stat-value" id="statHealth">—</div>
+            <div class="stat-foot" id="statHealthFoot">0 unresolved errors</div>
+          </div>
+        </div>
+
+        <div class="grid two-col">
+          <!-- Overview Left Column -->
+          <div class="main-col">
+            <!-- Agent Team Pair + 4-Stage Pipeline -->
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Your agent team</h2>
+                  <p class="panel-desc">Bilateral inspection, negotiation, execution &amp; independent verification.</p>
+                </div>
+                <div class="panel-head-actions">
+                  <label for="overviewWorkerSelect" class="visually-hidden">Preferred worker agent</label>
+                  <select id="overviewWorkerSelect" class="select select-compact">
+                    <option value="">Auto (OpenCode)</option>
+                    <option value="OPENCODE">OpenCode Desktop CLI</option>
+                    <option value="CLAUDE_CODE">Claude Code CLI</option>
+                    <option value="QWEN_CODE">Qwen Code CLI</option>
+                    <option value="ANTIGRAVITY">Google Antigravity CLI</option>
+                  </select>
+                  <button type="button" class="text-btn" data-go="agents">Manage agents ↗</button>
+                </div>
+              </div>
+
+              <div class="agent-row">
+                <div class="agent-card">
+                  <div class="agent-head">
+                    <div class="agent-logo google" id="ovInspectorLogo" aria-hidden="true">G</div>
+                    <div>
+                      <div class="agent-name" id="ovInspectorName">Google Antigravity</div>
+                      <div class="agent-role">Architect · Inspector &amp; Reviewer</div>
+                    </div>
+                    <span class="agent-online" id="ovInspectorStatus">● Online</span>
+                  </div>
+                  <div class="agent-meta">
+                    <span>Inspection &amp; Final Audit</span>
+                    <span id="ovInspectorVer">agy CLI</span>
+                  </div>
+                </div>
+
+                <div class="exchange" aria-hidden="true">⇄</div>
+
+                <div class="agent-card">
+                  <div class="agent-head">
+                    <div class="agent-logo deep" id="ovWorkerLogo" aria-hidden="true">O</div>
+                    <div>
+                      <div class="agent-name" id="ovWorkerName">OpenCode Desktop</div>
+                      <div class="agent-role">Negotiator · Implementer &amp; Tester</div>
+                    </div>
+                    <span class="agent-online" id="ovWorkerStatus">● Online</span>
+                  </div>
+                  <div class="agent-meta">
+                    <span>Negotiation &amp; Execution</span>
+                    <span id="ovWorkerVer">opencode CLI</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="pipeline" id="stageStepper">
+                <div class="step"><b>1. Inspection</b><small>Antigravity</small></div>
+                <div class="step"><b>2. Negotiation</b><small>OpenCode</small></div>
+                <div class="step"><b>3. Execution</b><small>OpenCode</small></div>
+                <div class="step"><b>4. Verification</b><small>Antigravity</small></div>
               </div>
             </div>
 
-            <div class="scope-input-row">
-              <label for="projectPath" class="visually-hidden">Target folder or file path</label>
-              <input type="text" id="projectPath" class="text-input text-input-sm" list="workspacePathsList"
-                placeholder="Folder or relative file path…">
-              <button type="button" class="btn btn-subtle btn-sm" id="btnAddTarget" hidden>+ Add</button>
+            <!-- Live Agent Action Areas (Dual Side-by-Side Fixed-Height Streams) -->
+            <div class="panel" id="liveActivityFeed">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Live agent action streams</h2>
+                  <p class="panel-desc">Watch both coding agents stream tool calls and summaries side-by-side.</p>
+                </div>
+                <div class="panel-head-actions">
+                  <label for="activeTaskSelect" class="visually-hidden">Select active task</label>
+                  <select id="activeTaskSelect" class="select select-compact task-switcher">
+                    <option value="">No tasks yet</option>
+                  </select>
+                  <span id="activeTaskActions" class="inline-actions"></span>
+                  <button type="button" class="text-btn" data-go="messages">Expand ↗</button>
+                </div>
+              </div>
+
+              <div class="dual-stream-grid">
+                <div class="stream-pane-card">
+                  <div class="stream-pane-head">
+                    <span id="inspectorAreaTitle" class="stream-pane-title">🟣 Antigravity Action Area</span>
+                    <span class="pill-mini" id="inspectorStatusPill">Idle</span>
+                  </div>
+                  <div id="inspectorActionStream" class="scroll-pane action-stream">
+                    <div class="empty">Create or select a task to stream inspector actions here.</div>
+                  </div>
+                </div>
+
+                <div class="stream-pane-card">
+                  <div class="stream-pane-head">
+                    <span id="workerAreaTitle" class="stream-pane-title">🟢 OpenCode Action Area</span>
+                    <span class="pill-mini" id="workerStatusPill">Idle</span>
+                  </div>
+                  <div id="workerActionStream" class="scroll-pane action-stream">
+                    <div class="empty">Create or select a task to stream worker actions here.</div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <datalist id="workspacePathsList"></datalist>
-            <div id="selectedFilesChips" class="chip-list"></div>
+
+            <!-- Active & Recent Tasks List -->
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Recent tasks</h2>
+                  <p class="panel-desc">Track queued, running, and completed orchestrations.</p>
+                </div>
+                <button type="button" class="text-btn" data-go="tasks">View all ↗</button>
+              </div>
+              <div id="overviewTasks">
+                <div class="empty">Loading tasks…</div>
+              </div>
+            </div>
+
+            <!-- Repository Snapshot & Quality Checks -->
+            <div class="grid view-grid">
+              <div class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 class="panel-title">Repository snapshot</h2>
+                    <p class="panel-desc" id="ovRepoRootDesc">Active checkout status</p>
+                  </div>
+                  <span class="pill" id="ovRepoBadge">Checking…</span>
+                </div>
+                <div id="overviewRepoCard">
+                  <div class="repo-row"><span>⑂ &nbsp;Branch</span><span id="ovRepoBranch">—</span></div>
+                  <div class="repo-row"><span>◉ &nbsp;Latest commit</span><span id="ovRepoCommit">—</span></div>
+                  <div class="repo-row"><span>▤ &nbsp;Working tree</span><span id="ovRepoTree">—</span></div>
+                </div>
+                <button type="button" class="text-btn" data-go="repository">Open repository ↗</button>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 class="panel-title">Diagnostics &amp; health</h2>
+                    <p class="panel-desc">PostgreSQL, CLIs &amp; active errors</p>
+                  </div>
+                  <span class="pill" id="ovHealthBadge">Healthy</span>
+                </div>
+                <div class="health"><span>Agents available</span><span id="ovHealthAgents">0 / 4</span></div>
+                <div class="bar"><span id="ovAgentsBar" style="width: 0%"></span></div>
+                <div class="health"><span>Task completion rate</span><span id="ovPassRate">—</span></div>
+                <div class="bar"><span id="ovPassBar" style="width: 100%"></span></div>
+                <button type="button" class="text-btn" data-go="tests">Open diagnostics ↗</button>
+              </div>
+            </div>
           </div>
 
-          <div class="attach-divider" aria-hidden="true"></div>
-
-          <div class="attach-group">
-            <div class="attach-header">
-              <span class="micro-label">Add Images</span>
-              <span class="drop-hint" id="imageDropHint">or drag &amp; drop / paste</span>
+          <!-- Overview Right Column -->
+          <div class="right-col">
+            <!-- Human Decisions Area (Always Visible & Click-Safe) -->
+            <div class="panel" id="decisionsPanel">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Human decisions</h2>
+                  <p class="panel-desc">Approval gates &amp; operator instructions</p>
+                </div>
+                <span class="pill amber" id="approvalsBadge">0 pending</span>
+              </div>
+              <div id="approvalsList" class="scroll-pane right-scroll">
+                <div class="empty">No actions currently require human approval.</div>
+              </div>
             </div>
-            <div id="imageDropZone" class="image-drop-row">
-              <button type="button" class="btn btn-subtle btn-sm" id="btnAddImages">🖼️ Add Images…</button>
-              <label for="imageFileInput" class="visually-hidden">Upload screenshot or reference images</label>
-              <input type="file" id="imageFileInput" class="visually-hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
-              <div id="attachedImagesList" class="image-thumb-list"></div>
+
+            <!-- Live Audit Activity -->
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Live activity</h2>
+                  <p class="panel-desc">Latest orchestration &amp; security events</p>
+                </div>
+                <button type="button" class="text-btn" data-go="activity">Full log ↗</button>
+              </div>
+              <div class="activity scroll-pane right-scroll" id="overviewActivity">
+                <div class="empty">Loading recent activity…</div>
+              </div>
+            </div>
+
+            <!-- Guardrails Summary -->
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Collaboration rules</h2>
+                  <p class="panel-desc">Active workspace guardrails</p>
+                </div>
+                <span class="pill">Active</span>
+              </div>
+              <div class="health"><span>Default worker</span><span class="live" id="ruleWorker">Auto (OpenCode)</span></div>
+              <div class="health"><span>Autonomy policy</span><span class="live" id="rulePolicy">Auto Low Impact</span></div>
+              <div class="health"><span>Git worktree isolation</span><span class="live" id="ruleWorktree">On</span></div>
+              <div class="health"><span>Independent audit</span><span style="color: var(--amber)">Enforced</span></div>
+              <button type="button" class="btn btn-full" data-go="settings">Configure workflow</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 2: TASKS -->
+      <section class="view" id="view-tasks" aria-label="Task queue">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Task queue</h2>
+              <p class="panel-desc">Create, run, stop, inspect changed files, or delete tasks.</p>
+            </div>
+            <button type="button" class="btn primary" id="tasksNew">＋ Create task</button>
+          </div>
+          <div class="toolbar">
+            <label for="taskSearch" class="visually-hidden">Search tasks</label>
+            <input type="search" class="search" id="taskSearch" placeholder="Search tasks by title or prompt…">
+            <label for="taskFilter" class="visually-hidden">Filter tasks by status</label>
+            <select class="select" id="taskFilter">
+              <option value="all">All statuses</option>
+              <option value="RUNNING">RUNNING</option>
+              <option value="AWAITING_APPROVAL">AWAITING_APPROVAL</option>
+              <option value="PENDING">PENDING</option>
+              <option value="COMPLETED">COMPLETED</option>
+              <option value="FAILED">FAILED</option>
+              <option value="CANCELLED">CANCELLED</option>
+            </select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <caption class="visually-hidden">Orchestrator task queue and history</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Task</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Team / Agent</th>
+                  <th scope="col">Worktree</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="taskTable">
+                <tr><td colspan="6" class="empty">Loading tasks…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 3: AGENTS -->
+      <section class="view" id="view-agents" aria-label="Detected host agents">
+        <div class="grid view-grid" id="agentsCardsGrid">
+          <div class="panel"><div class="empty">Loading detected CLI adapters…</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Role routing matrix</h2>
+              <p class="panel-desc">How bilateral collaboration pairs your selected CLI worker with Antigravity.</p>
+            </div>
+            <button type="button" class="btn" id="btnRefreshAgentsView">↻ Re-scan CLIs</button>
+          </div>
+          <div class="kv"><span>1. Inspection</span><strong id="matrixInspector">Google Antigravity CLI</strong></div>
+          <div class="kv"><span>2. Negotiation &amp; Challenge</span><strong id="matrixNegotiator">Selected Worker (default: OpenCode Desktop CLI)</strong></div>
+          <div class="kv"><span>3. Implementation</span><strong id="matrixImplementer">Selected Worker inside isolated Git worktree</strong></div>
+          <div class="kv"><span>4. Verification</span><strong id="matrixVerifier">Google Antigravity CLI (VERDICT gate)</strong></div>
+          <div class="kv"><span>Human-in-the-loop gate</span><strong>Triggered on ASK / STRICT policy or flagged plans</strong></div>
+        </div>
+      </section>
+
+      <!-- VIEW 4: CODE REVIEWS & HUMAN APPROVALS -->
+      <section class="view" id="view-reviews" aria-label="Code reviews and human decisions">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Approval inbox</h2>
+              <p class="panel-desc">High-impact workflow checkpoints awaiting human decision.</p>
+            </div>
+            <span class="pill amber" id="reviewsPendingPill">0 awaiting approval</span>
+          </div>
+          <div id="reviewsInboxList">
+            <div class="empty">No pending approvals right now.</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Completed &amp; verified patches</h2>
+              <p class="panel-desc">Inspect diffs and modified files from recent runs.</p>
+            </div>
+          </div>
+          <div id="completedReviewsList">
+            <div class="empty">Loading completed task reviews…</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 5: ERRORS & ACTIVITY LOG -->
+      <section class="view" id="view-activity" aria-label="Errors center and activity timeline">
+        <div class="panel" id="errorCenterSection">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Error messages &amp; diagnostics center</h2>
+              <p class="panel-desc">Live adapter failures, stderr captures, and unresolved alerts.</p>
+            </div>
+            <div class="panel-head-actions">
+              <span class="pill" id="errorCountBadge">0 active</span>
+              <button type="button" class="btn" id="btnClearErrors">Clear Resolved</button>
+            </div>
+          </div>
+          <div id="errorCenterList" class="scroll-pane ops-scroll">
+            <div class="empty">✓ All systems operational. No active errors.</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Audit &amp; activity timeline</h2>
+              <p class="panel-desc">Immutable database audit trail of task submissions, decisions, and state transitions.</p>
+            </div>
+            <button type="button" class="btn" id="exportLog">↓ Export CSV</button>
+          </div>
+          <div class="toolbar">
+            <label for="activitySearch" class="visually-hidden">Filter activity events</label>
+            <input type="search" class="search" id="activitySearch" placeholder="Filter activity messages…">
+            <label for="activityType" class="visually-hidden">Filter by event type</label>
+            <select class="select" id="activityType">
+              <option value="all">All event types</option>
+              <option value="TASK">Task events</option>
+              <option value="WORKFLOW">Workflow stages</option>
+              <option value="APPROVAL">Approvals</option>
+              <option value="ERROR">Errors</option>
+            </select>
+          </div>
+          <div id="activityList" class="scroll-pane ops-scroll">
+            <div class="empty">No audit events recorded yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 6: LIVE STREAMS (Expanded Dual Agent Output + Quick Dispatch) -->
+      <section class="view" id="view-messages" aria-label="Expanded live agent streams">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title" id="streamsHeaderTitle">Expanded dual action streams</h2>
+              <p class="panel-desc">Full-height view of the active task&rsquo;s tool calls, negotiations, and raw logs.</p>
+            </div>
+            <div class="panel-head-actions">
+              <label for="streamsTaskSelect" class="visually-hidden">Task to stream</label>
+              <select id="streamsTaskSelect" class="select select-compact task-switcher"></select>
+              <button type="button" class="btn" id="btnStreamsOpenFiles">📁 Files Worked On</button>
+            </div>
+          </div>
+          <div class="pipeline" id="streamsStageStepper"></div>
+        </div>
+
+        <div class="grid view-grid">
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title" id="streamsInspectorTitle">🟣 Antigravity Action Area</h2>
+              <span class="pill-mini" id="streamsInspectorPill">Idle</span>
+            </div>
+            <div id="streamsInspectorFeed" class="scroll-pane tall-stream">
+              <div class="empty">Select a task to view live inspector output.</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title" id="streamsWorkerTitle">🟢 OpenCode Action Area</h2>
+              <span class="pill-mini" id="streamsWorkerPill">Idle</span>
+            </div>
+            <div id="streamsWorkerFeed" class="scroll-pane tall-stream">
+              <div class="empty">Select a task to view live worker output.</div>
             </div>
           </div>
         </div>
 
-        <!-- Right Box: Prompt Text Area -->
-        <div class="panel-card composer-prompt-card">
-          <div class="prompt-header">
-            <label for="taskDesc" class="micro-label">Prompt Text Area</label>
-            <div class="prompt-header-tools">
-              <label for="taskTitle" class="visually-hidden">Optional custom task title</label>
-              <input type="text" id="taskTitle" class="title-inline-input"
-                placeholder="Optional title (auto-generated from prompt)">
-              <button type="button" class="btn btn-ghost btn-sm" id="btnPasteCode">📋 Paste Code</button>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Quick dispatch</h2>
+              <p class="panel-desc">Launch a collaborative team run directly into the active project scope.</p>
+            </div>
+            <button type="button" class="text-btn" id="btnOpenFullComposer">Full composer (files &amp; images) ↗</button>
+          </div>
+          <form id="quickStreamForm" class="quick-form">
+            <div class="field">
+              <label for="quickStreamPrompt" class="visually-hidden">Prompt for quick team dispatch</label>
+              <textarea id="quickStreamPrompt" class="prompt-textarea" rows="3" placeholder="Describe what the agents should inspect, negotiate, and fix… (Ctrl+Enter to run team)" required></textarea>
+            </div>
+            <div class="quick-form-actions">
+              <span class="muted" id="quickTargetSummary">Target: default project root</span>
+              <button type="submit" class="btn primary" id="quickRunBtn">Run Team ⚡</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- VIEW 7: REPOSITORY & CHANGED FILES -->
+      <section class="view" id="view-repository" aria-label="Repository status and diffs">
+        <div class="grid view-grid">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Repository overview</h2>
+                <p class="panel-desc" id="repoViewPath">—</p>
+              </div>
+              <span class="pill" id="repoViewCleanBadge">—</span>
+            </div>
+            <div id="repoDetailsKv">
+              <div class="empty">Loading Git status…</div>
+            </div>
+            <div class="toolbar toolbar-bottom">
+              <button type="button" class="btn" id="btnRepoRefresh">↻ Refresh Git status</button>
+              <button type="button" class="btn" id="btnRepoChangeFolder">📁 Change Target Folder…</button>
             </div>
           </div>
 
-          <textarea id="taskDesc" class="prompt-textarea" rows="4"
-            placeholder="Describe the task, paste code to inspect &amp; fix, or paste an image (Ctrl+Enter to run team)…"
-            required></textarea>
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Worktrees &amp; recent commits</h2>
+                <p class="panel-desc">Active checkouts and commit history</p>
+              </div>
+            </div>
+            <div id="repoCommitsAndWorktrees" class="scroll-pane ops-scroll">
+              <div class="empty">Loading commits &amp; worktrees…</div>
+            </div>
+          </div>
+        </div>
 
-          <div class="prompt-controls">
-            <div class="control-selectors">
-              <div class="control-field">
-                <label for="taskAgent" class="control-label">Worker</label>
-                <select id="taskAgent" class="select-input">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Task changed files &amp; tool diffs</h2>
+              <p class="panel-desc" id="repoTaskFilesDesc">Changed files in the active task workspace</p>
+            </div>
+            <button type="button" class="btn" id="btnRepoOpenFilesModal">Open modal diff viewer</button>
+          </div>
+          <div id="repoFilesContainer" class="scroll-pane files-scroll">
+            <div class="empty">Select a task to view changed files.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 8: DIAGNOSTICS & HEALTH -->
+      <section class="view" id="view-tests" aria-label="System diagnostics and health">
+        <div class="grid stats">
+          <div class="stat">
+            <div class="stat-label"><span>Database</span><span aria-hidden="true">◉</span></div>
+            <div class="stat-value" id="diagDbValue">OK</div>
+            <div class="stat-foot" id="diagDbFoot">postgresql (localhost:5433)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label"><span>Host CLIs</span><span aria-hidden="true">◎</span></div>
+            <div class="stat-value" id="diagCliValue">0</div>
+            <div class="stat-foot">Verified adapters</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label"><span>Total Tasks</span><span aria-hidden="true">☷</span></div>
+            <div class="stat-value" id="diagTotalValue">0</div>
+            <div class="stat-foot" id="diagFailedFoot">0 failed</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label"><span>Active Errors</span><span aria-hidden="true">!</span></div>
+            <div class="stat-value" id="diagErrorsValue">0</div>
+            <div class="stat-foot" id="diagStatusFoot">Status: healthy</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Detected CLI executables</h2>
+              <p class="panel-desc">Live probe output from <code>GET /diagnostics</code></p>
+            </div>
+            <button type="button" class="btn primary" id="btnRunDiagnostics">↻ Refresh diagnostics</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <caption class="visually-hidden">Detected coding CLI executables</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Agent</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Version</th>
+                  <th scope="col">Executable Path</th>
+                  <th scope="col">Status</th>
+                </tr>
+              </thead>
+              <tbody id="diagCliTbody">
+                <tr><td colspan="5" class="empty">Loading diagnostics…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 9: SETTINGS -->
+      <section class="view" id="view-settings" aria-label="Workspace settings">
+        <div class="settings-layout">
+          <div class="panel settings-nav" id="settingsNav" role="tablist" aria-label="Settings categories">
+            <button type="button" class="active" data-settings="workflow" role="tab" aria-selected="true">Workflow</button>
+            <button type="button" data-settings="permissions" role="tab" aria-selected="false">Safety &amp; Git</button>
+            <button type="button" data-settings="agents-config" role="tab" aria-selected="false">Workspace Scope</button>
+            <button type="button" data-settings="appearance" role="tab" aria-selected="false">Appearance</button>
+          </div>
+
+          <div class="panel">
+            <div class="settings-pane" id="settings-workflow">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Workflow defaults</h2>
+                  <p class="panel-desc">Saved in browser storage and pre-applied to new tasks.</p>
+                </div>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <strong>Default Worker Agent</strong>
+                  <p>Agent paired with Antigravity for negotiation and execution.</p>
+                </div>
+                <label for="prefDefaultWorker" class="visually-hidden">Default worker agent</label>
+                <select id="prefDefaultWorker" class="select">
                   <option value="">Auto (OpenCode)</option>
                   <option value="OPENCODE">OpenCode Desktop CLI</option>
-                  <option value="ANTIGRAVITY">Google Antigravity CLI</option>
                   <option value="CLAUDE_CODE">Claude Code CLI</option>
                   <option value="QWEN_CODE">Qwen Code CLI</option>
+                  <option value="ANTIGRAVITY">Google Antigravity CLI</option>
                 </select>
               </div>
-              <div class="control-field">
-                <label for="taskPolicy" class="control-label">Policy</label>
-                <select id="taskPolicy" class="select-input">
-                  <option value="AUTO_LOW_IMPACT">Auto Low Impact</option>
+              <div class="setting-row">
+                <div>
+                  <strong>Default Autonomy Policy</strong>
+                  <p>Controls when agents pause for human approval.</p>
+                </div>
+                <label for="prefDefaultPolicy" class="visually-hidden">Default autonomy policy</label>
+                <select id="prefDefaultPolicy" class="select">
+                  <option value="AUTO_LOW_IMPACT">Auto Low Impact (Default)</option>
                   <option value="ASK">Ask on High Risk</option>
                   <option value="STRICT">Strict Approval</option>
                   <option value="ALLOW_ALL">Allow All (Sandbox)</option>
                 </select>
               </div>
-              <label class="check-label" for="useWorktree">
-                <input type="checkbox" id="useWorktree" checked>
-                <span>Worktree</span>
-              </label>
             </div>
 
-            <div class="composer-actions">
-              <button type="button" class="btn btn-subtle" id="btnSingleRun">Single Run</button>
-              <button type="submit" class="btn btn-primary" id="btnSubmitTask">Run Team ⚡</button>
+            <div class="settings-pane" id="settings-permissions" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Safety &amp; Git isolation</h2>
+                  <p class="panel-desc">Default isolation controls applied at task submission.</p>
+                </div>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <strong>Isolate tasks in dedicated Git worktree</strong>
+                  <p>Prevents agent edits from mutating your primary checkout directly.</p>
+                </div>
+                <button type="button" class="switch on" id="prefWorktreeSwitch" aria-pressed="true" aria-label="Toggle default Git worktree isolation"></button>
+              </div>
+            </div>
+
+            <div class="settings-pane" id="settings-agents-config" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Target workspace folder</h2>
+                  <p class="panel-desc">Default folder targeted by new tasks.</p>
+                </div>
+              </div>
+              <div class="field">
+                <label for="prefWorkspacePath">Current Project Root</label>
+                <div class="scope-input-row">
+                  <input type="text" id="prefWorkspacePath" readonly>
+                  <button type="button" class="btn" id="btnSettingsBrowseFolder">📁 Browse…</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-pane" id="settings-appearance" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Appearance</h2>
+                  <p class="panel-desc">Theme and layout density preferences.</p>
+                </div>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <strong>Color Theme</strong>
+                  <p>Switch between Midnight Dark and crisp Light Mode.</p>
+                </div>
+                <label for="themeSelect" class="visually-hidden">Color theme</label>
+                <select class="select" id="themeSelect">
+                  <option value="dark">Midnight Dark</option>
+                  <option value="light">Light Mode</option>
+                </select>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <strong>Compact density</strong>
+                  <p>Use tighter padding across panels and streams.</p>
+                </div>
+                <button type="button" class="switch" id="prefCompactSwitch" aria-pressed="false" aria-label="Toggle compact UI density"></button>
+              </div>
+            </div>
+
+            <div class="settings-footer">
+              <button type="button" class="btn primary" id="saveSettings">Save preferences</button>
             </div>
           </div>
-
-          <div id="composerFeedback" class="inline-feedback" role="alert" hidden></div>
         </div>
-      </form>
-    </section>
+      </section>
+    </main>
+  </div>
 
-    <!-- Active Task Bar + Stage Stepper -->
-    <section class="active-task-bar" aria-label="Active Task Controls">
-      <div class="active-task-left">
-        <label for="activeTaskSelect" class="micro-label">Active Task</label>
-        <select id="activeTaskSelect" class="select-input task-switcher">
-          <option value="">No tasks yet</option>
-        </select>
-        <span class="status-badge" id="activeTaskStatusBadge" hidden>IDLE</span>
+  <!-- Mobile Bottom Navigation -->
+  <nav class="mobile-nav" id="mobileNav" aria-label="Mobile navigation">
+    <button type="button" class="active" data-view="overview" aria-current="page"><span aria-hidden="true">▦</span>Home</button>
+    <button type="button" data-view="tasks"><span aria-hidden="true">☷</span>Tasks</button>
+    <button type="button" data-view="messages"><span aria-hidden="true">↔</span>Streams</button>
+    <button type="button" data-view="reviews"><span aria-hidden="true">◇</span>Reviews</button>
+    <button type="button" data-view="settings"><span aria-hidden="true">⚙</span>Settings</button>
+  </nav>
+
+  <!-- Native Modal 1: Task Composer (Scope, Images, Auto-Sizing Prompt, Controls) -->
+  <dialog id="taskModal" class="pw-dialog" closedby="any" aria-labelledby="taskModalTitle">
+    <header class="dialog-head">
+      <div>
+        <h2 id="taskModalTitle" class="dialog-title">Create a task</h2>
+        <p class="dialog-sub">Target a folder, specific files, or screenshots — agents coordinate automatically.</p>
+      </div>
+      <button type="button" class="icon-btn" id="closeModalBtn" aria-label="Close task composer">✕</button>
+    </header>
+
+    <form id="taskForm" class="dialog-body" novalidate>
+      <div class="field">
+        <label for="taskTitle">Task Title <span class="muted">(Optional — auto-generated if blank)</span></label>
+        <input type="text" id="taskTitle" placeholder="Auto-generated from your prompt below (or enter custom title)">
       </div>
 
-      <div id="stageStepper" class="stage-stepper" hidden></div>
-
-      <div class="active-task-actions" id="activeTaskActions"></div>
-    </section>
-
-    <!-- Row 3: Dual Fixed-Height Scrollable Agent Action Areas -->
-    <section id="liveActivityFeed" class="action-grid" aria-label="Live Agent Action Areas">
-      <article class="panel-card action-card" id="inspectorActionCard">
-        <header class="panel-header">
-          <div class="panel-title-group">
-            <h2 id="inspectorAreaTitle" class="panel-title">🟣 Antigravity Action Area</h2>
-            <span class="role-badge">Inspector / Reviewer</span>
-          </div>
-          <span class="status-pill" id="inspectorStatusPill">Idle</span>
-        </header>
-        <div id="inspectorActionStream" class="scroll-pane action-stream">
-          <div class="empty-state">Submit or select a task to watch live inspection &amp; verification events here.</div>
+      <div class="field">
+        <div class="field-label-row">
+          <label for="taskDesc">Instructions / Prompt &mdash; or Paste Code</label>
+          <button type="button" class="btn btn-sm" id="btnPasteCode">📋 Paste / Wrap Code</button>
         </div>
-      </article>
+        <textarea id="taskDesc" class="prompt-textarea" rows="4" autofocus
+          placeholder="Describe what to inspect &amp; fix, paste code, or paste a screenshot (Ctrl+Enter to run team)…"
+          required></textarea>
+      </div>
 
-      <article class="panel-card action-card" id="workerActionCard">
-        <header class="panel-header">
-          <div class="panel-title-group">
-            <h2 id="workerAreaTitle" class="panel-title">🟢 OpenCode Action Area</h2>
-            <span class="role-badge">Negotiator / Worker</span>
-          </div>
-          <span class="status-pill" id="workerStatusPill">Idle</span>
-        </header>
-        <div id="workerActionStream" class="scroll-pane action-stream">
-          <div class="empty-state">Submit or select a task to watch live negotiation &amp; code execution here.</div>
+      <div class="composer-split-row">
+        <div class="field">
+          <label for="taskAgent">Worker Agent</label>
+          <select id="taskAgent">
+            <option value="">Auto (OpenCode Desktop CLI)</option>
+            <option value="OPENCODE">OpenCode Desktop CLI</option>
+            <option value="CLAUDE_CODE">Claude Code CLI</option>
+            <option value="QWEN_CODE">Qwen Code CLI</option>
+            <option value="ANTIGRAVITY">Google Antigravity CLI</option>
+          </select>
         </div>
-      </article>
-    </section>
-
-    <!-- Row 4: Errors Area & Human Decisions Area -->
-    <section class="ops-grid" aria-label="Operations and Decisions">
-      <article class="panel-card ops-card" id="errorCenterSection">
-        <header class="panel-header">
-          <div class="panel-title-group">
-            <h2 class="panel-title">Errors Area</h2>
-            <span class="badge badge-success" id="errorCountBadge">0</span>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btnClearErrors">Clear Resolved</button>
-        </header>
-        <div id="errorCenterList" class="scroll-pane ops-body">
-          <div class="empty-state">✓ All systems operational. No active errors.</div>
+        <div class="field">
+          <label for="taskPolicy">Autonomy Policy</label>
+          <select id="taskPolicy">
+            <option value="AUTO_LOW_IMPACT">Auto Low Impact (Default)</option>
+            <option value="ASK">Ask on High Risk</option>
+            <option value="STRICT">Strict Approval</option>
+            <option value="ALLOW_ALL">Allow All (Sandbox)</option>
+          </select>
         </div>
-      </article>
+      </div>
 
-      <article class="panel-card ops-card" id="decisionsSection">
-        <header class="panel-header">
-          <div class="panel-title-group">
-            <h2 class="panel-title">Human Decisions Area</h2>
-            <span class="badge badge-warning" id="approvalsBadge">0</span>
+      <div class="field">
+        <div class="field-label-row">
+          <label for="projectPath">Target Files / Folders</label>
+          <div class="inline-actions">
+            <button type="button" class="btn btn-sm scope-mode-btn active" id="btnScopeFolder">📁 Folder…</button>
+            <button type="button" class="btn btn-sm scope-mode-btn" id="btnScopeFiles">📄 Files…</button>
           </div>
-          <span class="panel-hint">Approval gates &amp; operator instructions</span>
-        </header>
-        <div id="approvalsList" class="scroll-pane ops-body">
-          <p class="empty-state">No actions currently require human approval.</p>
         </div>
-      </article>
-    </section>
-  </main>
+        <div class="scope-input-row">
+          <input type="text" id="projectPath" list="workspacePathsList" placeholder="Target folder or relative file path…">
+          <button type="button" class="btn btn-sm" id="btnAddTarget" hidden>+ Add</button>
+        </div>
+        <datalist id="workspacePathsList"></datalist>
+        <div id="selectedFilesChips" class="chip-list"></div>
+      </div>
 
-  <footer class="footer">
-    <p>AI Coding Command Center v1.0.0 &bull; Local PostgreSQL 18 &bull; Windows 11</p>
-  </footer>
+      <div class="field">
+        <div class="field-label-row">
+          <span class="field-label-text">Reference Images</span>
+          <span class="muted" id="imageDropHint">or drag &amp; drop / paste</span>
+        </div>
+        <div id="imageDropZone" class="image-drop-row">
+          <button type="button" class="btn btn-sm" id="btnAddImages">🖼️ Add Images…</button>
+          <label for="imageFileInput" class="visually-hidden">Upload reference images</label>
+          <input type="file" id="imageFileInput" class="visually-hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+          <div id="attachedImagesList" class="image-thumb-list"></div>
+        </div>
+      </div>
 
-  <!-- Native Modal 1: File & Folder Explorer -->
-  <dialog id="fsExplorerDialog" class="app-dialog" closedby="any" aria-labelledby="fsExplorerTitle">
-    <header class="dialog-header">
-      <h2 id="fsExplorerTitle" class="dialog-title">📁 Select Target Folder</h2>
-      <div class="dialog-header-actions">
-        <button type="button" class="btn btn-subtle btn-sm" id="btnFsParent">⬆️ Parent</button>
-        <button type="button" class="btn btn-subtle btn-sm" id="btnFsRoot">🏠 Project Root</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnFsClose" aria-label="Close file explorer">✕</button>
+      <label class="check-row" for="useWorktree">
+        <input type="checkbox" id="useWorktree" checked>
+        <span>Isolate changes in dedicated Git worktree</span>
+      </label>
+
+      <div id="composerFeedback" class="inline-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn" id="cancelModalBtn">Cancel</button>
+        <button type="button" class="btn" id="btnSingleRun">Single Run</button>
+        <button type="submit" class="btn primary" id="btnSubmitTask">Run Team ⚡</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Native Modal 2: Interactive File & Folder Explorer -->
+  <dialog id="fsExplorerDialog" class="pw-dialog pw-dialog-wide" closedby="any" aria-labelledby="fsExplorerTitle">
+    <header class="dialog-head">
+      <div>
+        <h2 id="fsExplorerTitle" class="dialog-title">📁 Select Target Folder</h2>
+        <p class="dialog-sub" id="fsCurrentDirLabel">Loading…</p>
+      </div>
+      <div class="inline-actions">
+        <button type="button" class="btn btn-sm" id="btnFsParent">⬆️ Parent</button>
+        <button type="button" class="btn btn-sm" id="btnFsRoot">🏠 Project Root</button>
+        <button type="button" class="icon-btn" id="btnFsClose" aria-label="Close file explorer">✕</button>
       </div>
     </header>
     <div class="dialog-body">
-      <div class="fs-path-bar">
-        <span class="fs-path-label" id="fsCurrentDirLabel">Loading…</span>
-        <span class="fs-drives-bar" id="fsDrivesBar"></span>
-      </div>
+      <div class="fs-drives-bar" id="fsDrivesBar"></div>
       <form id="fsSearchForm" class="fs-search-row">
         <label for="fsSearchInput" class="visually-hidden">Filter files and folders</label>
-        <input type="search" id="fsSearchInput" class="text-input text-input-sm" placeholder="Filter files &amp; folders…">
+        <input type="search" id="fsSearchInput" class="search" placeholder="Search or filter files &amp; folders…">
         <button type="button" class="btn btn-approve btn-sm" id="btnUseCurrentFolder">✓ Use This Folder</button>
         <button type="button" class="btn btn-approve btn-sm" id="btnFsDone" hidden>✓ Done</button>
-        <button type="button" class="btn btn-subtle btn-sm" id="btnFsClearSelected" hidden>Clear Selected</button>
+        <button type="button" class="btn btn-sm" id="btnFsClearSelected" hidden>Clear Selected</button>
       </form>
       <div id="fsEntriesList" class="scroll-pane fs-entries-list">
-        <div class="empty-state">Loading directory contents…</div>
+        <div class="empty">Loading directory contents…</div>
       </div>
     </div>
   </dialog>
 
-  <!-- Native Modal 2: Files Worked On & Diffs -->
-  <dialog id="filesDialog" class="app-dialog app-dialog-wide" closedby="any" aria-labelledby="filesDialogTitle">
-    <header class="dialog-header">
-      <div class="dialog-title-group">
+  <!-- Native Modal 3: Files Worked On & Unified Diffs -->
+  <dialog id="filesDialog" class="pw-dialog pw-dialog-wide" closedby="any" aria-labelledby="filesDialogTitle">
+    <header class="dialog-head">
+      <div class="inline-actions">
         <h2 id="filesDialogTitle" class="dialog-title">📁 Files Worked On</h2>
-        <span class="badge" id="modalFilesBadge">0</span>
+        <span class="pill-mini" id="modalFilesBadge">0</span>
       </div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnCloseFilesDialog" aria-label="Close files worked on dialog">✕</button>
+      <button type="button" class="icon-btn" id="btnCloseFilesDialog" aria-label="Close files inspector">✕</button>
     </header>
-    <div id="filesContainer" class="dialog-body scroll-pane files-container">
-      <div class="empty-state">Select a task to view changed files and tool activity.</div>
+    <div id="filesContainer" class="dialog-body scroll-pane files-dialog-body">
+      <div class="empty">Select a task to view modified files and tool calls.</div>
     </div>
   </dialog>
 
-  <!-- Native Modal 3: Task Execution History & Live Audit Log -->
-  <dialog id="historyDialog" class="app-dialog app-dialog-wide" closedby="any" aria-labelledby="historyDialogTitle">
-    <header class="dialog-header">
-      <div class="dialog-title-group">
-        <h2 id="historyDialogTitle" class="dialog-title">Task History &amp; Audit Log</h2>
-        <div class="segmented-tabs" role="tablist" aria-label="History views">
-          <button type="button" class="tab-btn active" id="tabHistoryTasks" role="tab" aria-selected="true" aria-controls="historyTasksPanel">Tasks</button>
-          <button type="button" class="tab-btn" id="tabHistoryAudit" role="tab" aria-selected="false" aria-controls="historyAuditPanel">Audit Log</button>
-        </div>
-      </div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnCloseHistoryDialog" aria-label="Close task history dialog">✕</button>
-    </header>
-    <div class="dialog-body scroll-pane">
-      <div id="historyTasksPanel" role="tabpanel" aria-labelledby="tabHistoryTasks">
-        <div class="table-container">
-          <table class="tasks-table">
-            <caption class="visually-hidden">Recent task executions</caption>
-            <thead>
-              <tr>
-                <th scope="col">Task</th>
-                <th scope="col">Team / Agent</th>
-                <th scope="col">Status</th>
-                <th scope="col">Worktree</th>
-                <th scope="col">Created</th>
-                <th scope="col">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="tasksTbody">
-              <tr>
-                <td colspan="6" class="empty-state">Loading tasks…</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div id="historyAuditPanel" role="tabpanel" aria-labelledby="tabHistoryAudit" hidden>
-        <div id="auditLogContainer" class="audit-card">
-          <div class="empty-state">No audit logs recorded yet.</div>
-        </div>
-      </div>
-    </div>
-  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=20261119f"></script>
+  <script src="app.js?v=20261120p"></script>
 </body>
 </html>
