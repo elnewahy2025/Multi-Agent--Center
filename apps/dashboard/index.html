@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" id="metaThemeColor" content="#0a1020">
   <title>Pairwise | AI Coding Command Center</title>
-  <link rel="stylesheet" href="styles.css?v=20261120p">
+  <link rel="stylesheet" href="styles.css?v=20261120q">
 </head>
 <body>
   <a href="#mainContent" class="skip-link visually-hidden">Skip to workspace</a>
@@ -26,7 +26,7 @@
       <div>
         <div class="section-label">Workspace</div>
         <button type="button" class="project-btn" id="projectSwitch" aria-label="Change active project folder">
-          <span class="project-btn-name">◈ &nbsp;<span id="sidebarProjectName">AI-Coding-Command-Center</span></span>
+          <span class="project-btn-name">◈ &nbsp;<span id="sidebarProjectName">Workspace</span></span>
           <span aria-hidden="true">⌄</span>
         </button>
       </div>
@@ -84,16 +84,16 @@
         <div class="connect-card">
           <div class="connect-head">
             <span>AGENT CONNECTIONS</span>
-            <span class="live" id="sidebarLiveLabel">● LIVE</span>
+            <span class="live" id="sidebarLiveLabel">○ Checking…</span>
           </div>
           <div id="sidebarConnectionsList" class="connect-list">
             <div class="connect-line"><span>Scanning CLIs…</span><span>…</span></div>
           </div>
         </div>
         <div class="user-card">
-          <div class="avatar" aria-hidden="true">CC</div>
+          <div class="avatar" aria-hidden="true">OP</div>
           <div class="user-meta">
-            <span class="user-name">Ahmed</span>
+            <span class="user-name">Operator</span>
             <small id="dbStatus">DB: Connecting…</small>
           </div>
         </div>
@@ -118,7 +118,7 @@
           <h1 id="pageTitle">Good evening. Let&rsquo;s build.</h1>
           <p class="sub" id="pageSub">Your host agents are detected and ready to collaborate.</p>
         </div>
-        <span class="pill" id="systemStatus">● &nbsp; All systems operational</span>
+        <span class="pill" id="systemStatus">○ Connecting…</span>
       </div>
 
       <!-- VIEW 1: OVERVIEW -->
@@ -142,7 +142,7 @@
           <div class="stat">
             <div class="stat-label"><span>System Health</span><span aria-hidden="true">✦</span></div>
             <div class="stat-value" id="statHealth">—</div>
-            <div class="stat-foot" id="statHealthFoot">0 unresolved errors</div>
+            <div class="stat-foot" id="statHealthFoot">Checking…</div>
           </div>
         </div>
 
@@ -177,7 +177,7 @@
                       <div class="agent-name" id="ovInspectorName">Google Antigravity</div>
                       <div class="agent-role">Architect · Inspector &amp; Reviewer</div>
                     </div>
-                    <span class="agent-online" id="ovInspectorStatus">● Online</span>
+                    <span class="agent-online" id="ovInspectorStatus">○ Checking…</span>
                   </div>
                   <div class="agent-meta">
                     <span>Inspection &amp; Final Audit</span>
@@ -194,7 +194,7 @@
                       <div class="agent-name" id="ovWorkerName">OpenCode Desktop</div>
                       <div class="agent-role">Negotiator · Implementer &amp; Tester</div>
                     </div>
-                    <span class="agent-online" id="ovWorkerStatus">● Online</span>
+                    <span class="agent-online" id="ovWorkerStatus">○ Checking…</span>
                   </div>
                   <div class="agent-meta">
                     <span>Negotiation &amp; Execution</span>
@@ -289,12 +289,12 @@
                     <h2 class="panel-title">Diagnostics &amp; health</h2>
                     <p class="panel-desc">PostgreSQL, CLIs &amp; active errors</p>
                   </div>
-                  <span class="pill" id="ovHealthBadge">Healthy</span>
+                  <span class="pill" id="ovHealthBadge">Checking…</span>
                 </div>
-                <div class="health"><span>Agents available</span><span id="ovHealthAgents">0 / 4</span></div>
+                <div class="health"><span>Agents available</span><span id="ovHealthAgents">—</span></div>
                 <div class="bar"><span id="ovAgentsBar" style="width: 0%"></span></div>
                 <div class="health"><span>Task completion rate</span><span id="ovPassRate">—</span></div>
-                <div class="bar"><span id="ovPassBar" style="width: 100%"></span></div>
+                <div class="bar"><span id="ovPassBar" style="width: 0%"></span></div>
                 <button type="button" class="text-btn" data-go="tests">Open diagnostics ↗</button>
               </div>
             </div>
@@ -457,7 +457,7 @@
             </div>
           </div>
           <div id="errorCenterList" class="scroll-pane ops-scroll">
-            <div class="empty">✓ All systems operational. No active errors.</div>
+            <div class="empty">Loading errors…</div>
           </div>
         </div>
 
@@ -599,8 +599,8 @@
         <div class="grid stats">
           <div class="stat">
             <div class="stat-label"><span>Database</span><span aria-hidden="true">◉</span></div>
-            <div class="stat-value" id="diagDbValue">OK</div>
-            <div class="stat-foot" id="diagDbFoot">postgresql (localhost:5433)</div>
+            <div class="stat-value" id="diagDbValue">—</div>
+            <div class="stat-foot" id="diagDbFoot">Checking…</div>
           </div>
           <div class="stat">
             <div class="stat-label"><span>Host CLIs</span><span aria-hidden="true">◎</span></div>
@@ -615,7 +615,7 @@
           <div class="stat">
             <div class="stat-label"><span>Active Errors</span><span aria-hidden="true">!</span></div>
             <div class="stat-value" id="diagErrorsValue">0</div>
-            <div class="stat-foot" id="diagStatusFoot">Status: healthy</div>
+            <div class="stat-foot" id="diagStatusFoot">Status: checking…</div>
           </div>
         </div>
 
@@ -657,7 +657,7 @@
             <button type="button" data-settings="appearance" role="tab" aria-selected="false">Appearance</button>
           </div>
 
-          <div class="panel">
+          <form id="settingsForm" class="panel" onsubmit="event.preventDefault(); document.getElementById('saveSettings')?.click();">
             <div class="settings-pane" id="settings-workflow">
               <div class="panel-head">
                 <div>
@@ -691,6 +691,14 @@
                   <option value="STRICT">Strict Approval</option>
                   <option value="ALLOW_ALL">Allow All (Sandbox)</option>
                 </select>
+              </div>
+              <div class="setting-row">
+                <div>
+                  <strong>Operator name</strong>
+                  <p>Name recorded as <code>decided_by</code> for approval decisions.</p>
+                </div>
+                <label for="prefOperatorName" class="visually-hidden">Operator name</label>
+                <input type="text" id="prefOperatorName" class="search" style="flex: 0 1 220px;" value="Operator">
               </div>
             </div>
 
@@ -756,7 +764,7 @@
             <div class="settings-footer">
               <button type="button" class="btn primary" id="saveSettings">Save preferences</button>
             </div>
-          </div>
+          </form>
         </div>
       </section>
     </main>
@@ -907,6 +915,6 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=20261120p"></script>
+  <script src="app.js?v=20261120q"></script>
 </body>
 </html>

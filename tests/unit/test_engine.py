@@ -22,7 +22,8 @@ class TestOrchestrator(unittest.TestCase):
         res = self.client.get("/health")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data["status"], "healthy")
+        self.assertIn(data["status"], ("healthy", "degraded"))
+        self.assertIn("database_connected", data)
         self.assertGreaterEqual(data["available_agents"], 2)
 
     def test_list_agents_endpoint(self):
@@ -225,6 +226,163 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIsInstance(data["worktrees"], list)
         self.assertGreaterEqual(len(data["worktrees"]), 1)
 
+    def test_diagnostics_endpoint(self):
+        res = self.client.get("/diagnostics")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        # Backward-compatible keys
+        for key in ("status", "active_errors", "total_tasks", "failed_tasks", "database", "agents"):
+            self.assertIn(key, data)
+        # New keys
+        for key in ("task_counts", "run_counts", "pending_approvals", "registered_agents",
+                    "available_agents", "total_workflows", "verified_workflows",
+                    "database_connected", "database_dialect"):
+            self.assertIn(key, data)
+        self.assertEqual(data["registered_agents"], 4)
+        self.assertGreaterEqual(data["available_agents"], 2)
+        # At least one available descriptor present
+        avail_flags = {a.get("available") for a in data["agents"]}
+        self.assertIn(True, avail_flags)
+        # task_counts has all statuses
+        self.assertIsInstance(data["task_counts"], dict)
+        for st in ("PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "AWAITING_APPROVAL"):
+            self.assertIn(st, data["task_counts"])
+        # Empty-ish state: exact counts are non-negative
+        self.assertGreaterEqual(data["pending_approvals"], 0)
+
+    def test_diagnostics_task_counts_not_truncated(self):
+        created_ids = []
+        try:
+            for i in range(55):
+                r = self.client.post("/tasks", json={"description": f"diagnostics count test {i}", "policy_mode": "AUTO_LOW_IMPACT"})
+                self.assertEqual(r.status_code, 200)
+                created_ids.append(r.json()["id"])
+            res = self.client.get("/diagnostics")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertGreaterEqual(data["total_tasks"], 55)
+            # Sum of task_counts equals total_tasks
+            self.assertEqual(sum(data["task_counts"].values()), data["total_tasks"])
+        finally:
+            for tid in created_ids:
+                self.client.delete(f"/tasks/{tid}")
+
+    def test_static_no_fake_literals(self):
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[2]
+        for rel in ("apps/dashboard/index.html", "apps/dashboard/app.js"):
+            text = (repo_root / rel).read_text(encoding="utf-8")
+            for forbidden in ("PostgreSQL 18", "localhost:5433", "Ahmed", "● LIVE"):
+                self.assertNotIn(forbidden, text, msg=f"{forbidden!r} found in {rel}")
+        html = (repo_root / "apps/dashboard/index.html").read_text(encoding="utf-8")
+        self.assertNotIn('id="diagDbValue">OK', html)
+        self.assertNotIn("Status: healthy", html)
+
+    def test_health_and_diagnostics_degraded_when_db_unavailable(self):
+        from unittest.mock import patch
+        probe = {
+            "connected": False,
+            "dialect": None,
+            "version": None,
+            "database": None,
+            "host": None,
+            "port": None,
+            "error": "db down",
+        }
+        with patch("services.orchestrator.api._probe_database", return_value=probe):
+            for path in ("/health", "/diagnostics"):
+                res = self.client.get(path)
+                self.assertEqual(res.status_code, 200, msg=path)
+                data = res.json()
+                self.assertFalse(data["database_connected"], msg=path)
+                self.assertEqual(data["status"], "degraded", msg=path)
+
+    def test_diagnostics_degraded_when_session_fails(self):
+        from unittest.mock import patch
+        probe = {
+            "connected": True,
+            "dialect": "sqlite",
+            "version": None,
+            "database": "test",
+            "host": None,
+            "port": None,
+            "error": None,
+        }
+        with patch("services.orchestrator.api._probe_database", return_value=probe):
+            with patch("services.orchestrator.api.get_db_session", side_effect=RuntimeError("session boom")):
+                res = self.client.get("/diagnostics")
+                self.assertEqual(res.status_code, 200)
+                data = res.json()
+                self.assertFalse(data["database_connected"])
+                self.assertEqual(data["status"], "degraded")
+                # Zeroed defaults with all TaskStatus keys present, even on failure.
+                self.assertEqual(data["total_tasks"], 0)
+                self.assertEqual(data["active_errors"], 0)
+                self.assertIsInstance(data["task_counts"], dict)
+                for st in ("PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "AWAITING_APPROVAL"):
+                    self.assertIn(st, data["task_counts"])
+                    self.assertEqual(data["task_counts"][st], 0)
+
+    def test_registry_list_descriptors_synthesizes_unavailable(self):
+        from unittest.mock import patch
+        from services.agent_bridge.registry import AgentRegistry
+        registry = AgentRegistry()
+        adapter = list(registry._adapters.values())[0]
+        atype = adapter.agent_type
+        before = registry.registered_count()
+        with patch.object(adapter, "detect", return_value=None):
+            descs = registry.list_descriptors()
+            self.assertEqual(registry.registered_count(), before)
+            d = next(x for x in descs if x.agent_type == atype)
+            self.assertFalse(d.is_available)
+        with patch.object(adapter, "detect", side_effect=RuntimeError("boom")):
+            descs = registry.list_descriptors()
+            self.assertEqual(registry.registered_count(), before)
+            d = next(x for x in descs if x.agent_type == atype)
+            self.assertFalse(d.is_available)
+
+
+    def test_diagnostics_task_counts_zeroed_on_mid_session_failure(self):
+        from unittest.mock import patch, MagicMock
+        probe = {
+            "connected": True,
+            "dialect": "sqlite",
+            "version": None,
+            "database": "test",
+            "host": None,
+            "port": None,
+            "error": None,
+        }
+        fake_session = MagicMock()
+
+        call_counter = {"n": 0}
+
+        def count_side_effect(*args, **kwargs):
+            call_counter["n"] += 1
+            if call_counter["n"] >= 4:
+                raise RuntimeError("mid-session boom")
+            return 0
+
+        fake_session.query.return_value.count.side_effect = count_side_effect
+        fake_session.query.return_value.filter_by.return_value.count.side_effect = count_side_effect
+
+        cm = MagicMock()
+        cm.__enter__.return_value = fake_session
+        cm.__exit__.return_value = False
+
+        with patch("services.orchestrator.api._probe_database", return_value=probe):
+            with patch("services.orchestrator.api.get_db_session", return_value=cm):
+                res = self.client.get("/diagnostics")
+                self.assertEqual(res.status_code, 200)
+                data = res.json()
+                self.assertFalse(data["database_connected"])
+                self.assertEqual(data["status"], "degraded")
+                self.assertEqual(data["total_tasks"], 0)
+                self.assertEqual(data["active_errors"], 0)
+                self.assertIsInstance(data["task_counts"], dict)
+                for st in ("PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "AWAITING_APPROVAL"):
+                    self.assertIn(st, data["task_counts"])
+                    self.assertEqual(data["task_counts"][st], 0)
 
 if __name__ == "__main__":
     unittest.main()

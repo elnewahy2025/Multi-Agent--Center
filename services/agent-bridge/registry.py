@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from packages.contracts.agent import AgentDescriptor
+from packages.contracts.agent import AgentCapabilities, AgentDescriptor
 from packages.contracts.enums import AgentType
 from services.agent_bridge.antigravity.adapter import AntigravityAdapter
 from services.agent_bridge.base import BaseAgentAdapter
@@ -32,13 +32,33 @@ class AgentRegistry:
         """Retrieve adapter for an agent type."""
         return self._adapters.get(agent_type)
 
+    def registered_count(self) -> int:
+        """Stable count of registered adapters (independent of probe success)."""
+        return len(self._adapters)
+
     def list_descriptors(self) -> List[AgentDescriptor]:
-        """Detect and return descriptors for all registered agents."""
+        """Detect and return descriptors for all registered agents.
+
+        Never drops an adapter: on None/exception synthesize an unavailable descriptor.
+        """
         descriptors: List[AgentDescriptor] = []
         for adapter in self._adapters.values():
-            desc = adapter.detect()
-            if desc:
-                descriptors.append(desc)
+            desc = None
+            try:
+                desc = adapter.detect()
+            except Exception:
+                desc = None
+            if not desc:
+                desc = AgentDescriptor(
+                    agent_type=adapter.agent_type,
+                    name=str(getattr(adapter, "name", None) or adapter.agent_type.value),
+                    executable_path="",
+                    version="unknown",
+                    is_available=False,
+                    capabilities=AgentCapabilities(),
+                    notes="Detection failed.",
+                )
+            descriptors.append(desc)
         return descriptors
 
     def get_available_agents(self) -> List[AgentDescriptor]:

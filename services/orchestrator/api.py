@@ -23,6 +23,8 @@ from packages.contracts import (
     TaskRead,
     TaskStatus,
 )
+from sqlalchemy import text
+
 from services.orchestrator.db import (
     AgentEventModel,
     ApprovalModel,
@@ -31,6 +33,7 @@ from services.orchestrator.db import (
     TaskModel,
     WorkflowRunModel,
     get_db_session,
+    get_engine,
     init_db,
 )
 from services.orchestrator.engine import TaskOrchestrator
@@ -74,14 +77,83 @@ def startup_event():
         print(f"Recovered {stale_recovered} interrupted task(s) from previous session.")
 
 
+def _probe_database() -> Dict[str, Any]:
+    """Probe database connectivity without leaking credentials or raising."""
+    result: Dict[str, Any] = {
+        "connected": False,
+        "dialect": None,
+        "version": None,
+        "database": None,
+        "host": None,
+        "port": None,
+        "error": None,
+    }
+    try:
+        engine = get_engine()
+        url = engine.url
+        # Structured, sanitized fields only (never the full URL / password).
+        result["dialect"] = getattr(engine.dialect, "name", None)
+        try:
+            result["host"] = url.host
+        except Exception:
+            result["host"] = None
+        try:
+            result["port"] = url.port
+        except Exception:
+            result["port"] = None
+        try:
+            result["database"] = url.database
+        except Exception:
+            result["database"] = None
+
+        with engine.connect() as conn:
+            ok = conn.execute(text("SELECT 1")).scalar()
+            result["connected"] = (ok == 1)
+
+        if result["connected"]:
+            try:
+                with engine.connect() as conn:
+                    if result["dialect"] == "postgresql":
+                        result["version"] = conn.execute(text("SELECT version()")).scalar()
+                    elif result["dialect"] == "sqlite":
+                        result["version"] = conn.execute(text("SELECT sqlite_version()")).scalar()
+                    else:
+                        result["version"] = None
+            except Exception as exc:
+                result["version"] = None
+                result["error"] = str(exc)
+    except Exception as exc:
+        result["connected"] = False
+        result["error"] = str(exc)
+    return result
+
+
+def _database_label(probe: Dict[str, Any]) -> str:
+    dialect = probe.get("dialect") or "database"
+    db_name = probe.get("database")
+    host = probe.get("host")
+    port = probe.get("port")
+    if db_name and host and port:
+        return f"{dialect} ({host}:{port}/{db_name})"
+    if db_name:
+        return f"{dialect} ({db_name})"
+    return str(dialect)
+
+
 @app.get("/health")
 def health_check() -> Dict[str, Any]:
     """Check system health, database connectivity, and registered agents."""
     agents = orchestrator.registry.get_available_agents()
+    probe = _probe_database()
+    status = "healthy" if probe["connected"] else "degraded"
     return {
-        "status": "healthy",
-        "database": "postgresql (command_center)",
+        "status": status,
+        "database": _database_label(probe),
+        "database_connected": bool(probe["connected"]),
+        "database_dialect": probe["dialect"],
+        "database_version": probe["version"],
         "available_agents": len(agents),
+        "registered_agents": orchestrator.registry.registered_count(),
         "agents": [a.name for a in agents],
     }
 
@@ -427,17 +499,80 @@ def clear_errors() -> Dict[str, Any]:
 @app.get("/diagnostics")
 def get_diagnostics() -> Dict[str, Any]:
     """Return live system health diagnostics, detected CLI paths, and error metrics."""
-    agents = orchestrator.registry.get_available_agents()
-    with get_db_session() as session:
-        active_errors = session.query(ErrorLogModel).filter_by(resolved=False).count()
-        total_tasks = session.query(TaskModel).count()
-        failed_tasks = session.query(TaskModel).filter_by(status="FAILED").count()
+    agents = orchestrator.registry.list_descriptors()
+    available_agents = [a for a in agents if a.is_available]
+    probe = _probe_database()
+
+    # Zeroed defaults so /diagnostics never 500s when DB is offline.
+    active_errors = 0
+    total_tasks = 0
+    failed_tasks = 0
+    task_counts: Dict[str, int] = {st.value: 0 for st in TaskStatus}
+    pending_approvals = 0
+    run_counts: Dict[str, int] = {}
+    total_workflows = 0
+    verified_workflows = 0
+
+    if probe["connected"]:
+        try:
+            with get_db_session() as session:
+                active_errors = session.query(ErrorLogModel).filter_by(resolved=False).count()
+                total_tasks = session.query(TaskModel).count()
+                failed_tasks = session.query(TaskModel).filter_by(status="FAILED").count()
+
+                task_counts = {}
+                for st in TaskStatus:
+                    task_counts[st.value] = session.query(TaskModel).filter_by(status=st.value).count()
+
+                pending_approvals = session.query(ApprovalModel).filter_by(decision="PENDING").count()
+
+                run_counts = {}
+                try:
+                    from collections import Counter
+                    rows = session.query(WorkflowRunModel.status).all()
+                    c = Counter(r[0] for r in rows)
+                    # Ensure stable keys for known statuses
+                    for key in ("RUNNING", "COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"):
+                        run_counts[key] = int(c.get(key, 0))
+                    for k, v in c.items():
+                        if k not in run_counts:
+                            run_counts[str(k)] = int(v)
+                except Exception:
+                    run_counts = {}
+
+                total_workflows = session.query(WorkflowRunModel).count()
+                verified_workflows = session.query(WorkflowRunModel).filter_by(is_verified=True).count()
+        except Exception as exc:
+            # Never return partial/inconsistent metrics on a mid-session failure.
+            active_errors = 0
+            total_tasks = 0
+            failed_tasks = 0
+            task_counts = {st.value: 0 for st in TaskStatus}
+            pending_approvals = 0
+            run_counts = {}
+            total_workflows = 0
+            verified_workflows = 0
+            probe["connected"] = False
+            probe["error"] = str(exc)
+
+    overall_status = "healthy" if (active_errors == 0 and probe["connected"]) else "degraded"
+
     return {
-        "status": "healthy" if active_errors == 0 else "degraded",
+        "status": overall_status,
         "active_errors": active_errors,
         "total_tasks": total_tasks,
         "failed_tasks": failed_tasks,
-        "database": "postgresql (localhost:5433)",
+        "task_counts": task_counts,
+        "run_counts": run_counts,
+        "pending_approvals": pending_approvals,
+        "registered_agents": orchestrator.registry.registered_count(),
+        "available_agents": len(available_agents),
+        "total_workflows": total_workflows,
+        "verified_workflows": verified_workflows,
+        "database": _database_label(probe),
+        "database_connected": bool(probe["connected"]),
+        "database_dialect": probe["dialect"],
+        "database_version": probe["version"],
         "agents": [
             {
                 "type": a.agent_type.value,

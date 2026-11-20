@@ -106,6 +106,7 @@ function loadPrefs() {
     defaultWorktree: true,
     theme: "dark",
     compact: false,
+    operatorName: "Operator",
   };
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -165,6 +166,16 @@ function applyPrefsToUI() {
   if (rulePolicy) rulePolicy.textContent = prefs.defaultPolicy || "AUTO_LOW_IMPACT";
   if (ruleWorktree) ruleWorktree.textContent = prefs.defaultWorktree ? "On" : "Off";
 
+  const userNameEl = document.querySelector(".user-name");
+  if (userNameEl) userNameEl.textContent = prefs.operatorName || "Operator";
+  const avatarEl = document.querySelector(".user-card .avatar");
+  if (avatarEl) {
+    const name = prefs.operatorName || "Operator";
+    avatarEl.textContent = name.slice(0, 2).toUpperCase();
+  }
+  const opInput = document.getElementById("prefOperatorName");
+  if (opInput) opInput.value = prefs.operatorName || "Operator";
+
   syncOverviewAgentCards();
 }
 
@@ -177,7 +188,11 @@ let cachedApprovals = [];
 let cachedErrors = [];
 let cachedAudit = [];
 let cachedDiagnostics = null;
+let agentsLoaded = false;
 let cachedRepoStatus = null;
+// Connectivity state
+let apiOnline = false;
+let dbConnected = false;
 
 let activeTaskId = null;
 let lastLoadedActiveTaskId = null;
@@ -436,7 +451,7 @@ async function pasteOrWrapCodeSnippet() {
 /* ---------- Scope, Workspace & Interactive Explorer ---------- */
 
 function updateWorkspaceLabels() {
-  const folder = selectedFolderRoot || workspaceRootPath || repoRootPath || "AI-Coding-Command-Center";
+  const folder = selectedFolderRoot || workspaceRootPath || repoRootPath || "Workspace";
   const shortName = folder.split("\\").filter(Boolean).pop()?.split("/").filter(Boolean).pop() || folder;
   const sideName = document.getElementById("sidebarProjectName");
   const quickSum = document.getElementById("quickTargetSummary");
@@ -1107,6 +1122,8 @@ function setupEventListeners() {
     prefs.defaultWorktree = document.getElementById("prefWorktreeSwitch")?.classList.contains("on") ?? true;
     prefs.theme = document.getElementById("themeSelect")?.value === "light" ? "light" : "dark";
     prefs.compact = document.getElementById("prefCompactSwitch")?.classList.contains("on") ?? false;
+    const opInput = document.getElementById("prefOperatorName");
+    if (opInput) prefs.operatorName = opInput.value.trim() || "Operator";
     savePrefsToStorage();
     applyPrefsToUI();
     showToast("Workspace preferences saved.");
@@ -1144,29 +1161,71 @@ async function refreshAll() {
 
 async function fetchHealth() {
   const dbEl = document.getElementById("dbStatus");
+  const liveLabel = document.getElementById("sidebarLiveLabel");
+  const systemStatus = document.getElementById("systemStatus");
+  const diagDbValue = document.getElementById("diagDbValue");
   try {
     const res = await fetch(`${API_BASE}/health`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    if (dbEl) dbEl.textContent = "DB: PostgreSQL 18 (Online)";
+    const d = await res.json();
+    apiOnline = true;
+    dbConnected = !!d.database_connected;
+    if (dbEl) dbEl.textContent = dbConnected ? `DB: ${d.database || "Connected"}` : "DB: Offline";
+    if (liveLabel) { liveLabel.textContent = "● Online"; liveLabel.className = "live"; }
+    if (diagDbValue) diagDbValue.textContent = dbConnected ? "Connected" : "Offline";
+    const diagDbFoot = document.getElementById("diagDbFoot");
+    if (diagDbFoot) diagDbFoot.textContent = d.database || "";
+    if (!dbConnected) {
+      // DB-only degradation: do not flip global offline (API is reachable).
+      if (systemStatus) { systemStatus.textContent = "● Degraded"; systemStatus.className = "pill amber"; }
+    }
+    // Re-sync the global status pill so it never stays stuck on "Backend Offline"
+    // after recovery or when diagnostics finished first.
+    if (!dbConnected || cachedDiagnostics) {
+      updateGlobalStatusPill(
+        Number(cachedDiagnostics?.task_counts?.RUNNING || 0),
+        Number(cachedDiagnostics?.task_counts?.AWAITING_APPROVAL || 0)
+      );
+    }
   } catch {
-    if (dbEl) dbEl.textContent = "DB: Offline";
+    apiOnline = false;
+    dbConnected = false;
+    setGlobalOffline();
   }
+}
+
+function setGlobalOffline() {
+  const dbEl = document.getElementById("dbStatus");
+  const liveLabel = document.getElementById("sidebarLiveLabel");
+  const systemStatus = document.getElementById("systemStatus");
+  const statHealth = document.getElementById("statHealth");
+  const statHealthFoot = document.getElementById("statHealthFoot");
+  const diagDbValue = document.getElementById("diagDbValue");
+  if (dbEl) dbEl.textContent = "DB: Offline";
+  if (liveLabel) { liveLabel.textContent = "● Offline"; liveLabel.className = "pill red"; }
+  if (systemStatus) { systemStatus.textContent = "● Backend Offline"; systemStatus.className = "pill red"; }
+  if (statHealth) statHealth.textContent = "Offline";
+  if (statHealthFoot) statHealthFoot.textContent = "Backend unreachable";
+  if (diagDbValue) diagDbValue.textContent = "Offline";
 }
 
 async function fetchAgents() {
   try {
     const res = await fetch(`${API_BASE}/agents`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const agents = await res.json();
     cachedAgents = Array.isArray(agents) ? agents : [];
+    agentsLoaded = true;
 
     const navCount = document.getElementById("navAgentsCount");
     const statAgents = document.getElementById("statAgents");
     const statFoot = document.getElementById("statAgentsFoot");
-    if (navCount) navCount.textContent = String(cachedAgents.length);
-    if (statAgents) statAgents.textContent = String(cachedAgents.length).padStart(2, "0");
+    const availableAgents = cachedAgents.filter((a) => a.is_available === true);
+    if (navCount) navCount.textContent = String(availableAgents.length);
+    if (statAgents) statAgents.textContent = String(availableAgents.length).padStart(2, "0");
     if (statFoot) {
-      statFoot.textContent = cachedAgents.length
-        ? cachedAgents.map((a) => getAgentMeta(a.agent_type).short).join(" · ")
+      statFoot.textContent = availableAgents.length
+        ? `${availableAgents.length}/${cachedAgents.length} available · ` + availableAgents.map((a) => getAgentMeta(a.agent_type).short).join(" · ")
         : "No host CLIs detected";
     }
 
@@ -1178,7 +1237,7 @@ async function fetchAgents() {
         : cachedAgents.map((a) => `
             <div class="connect-line">
               <span>${escapeHtml(getAgentMeta(a.agent_type).short)}</span>
-              <span class="live">Connected</span>
+              <span class="${a.is_available ? "live" : "pill red"}">${a.is_available ? "Connected" : "Missing"}</span>
             </div>
           `).join("");
     }
@@ -1218,16 +1277,30 @@ function syncOverviewAgentCards(workflow = null) {
     inspLogo.className = `agent-logo ${inspMeta.logoClass}`;
   }
   if (inspName) inspName.textContent = inspInfo?.name || inspMeta.full;
-  if (inspVer) inspVer.textContent = inspInfo?.version ? `v${inspInfo.version}` : inspMeta.cmd;
-  if (inspStat) inspStat.textContent = inspInfo || cachedAgents.length === 0 ? "● Online" : "○ Standby";
+  if (inspVer) {
+    const v = inspInfo?.version;
+    inspVer.textContent = (v && v !== "unknown" && v !== "not_installed") ? `v${v}` : (inspInfo?.is_available ? inspMeta.cmd : "Not installed");
+  }
+  if (inspStat) {
+    if (!agentsLoaded) inspStat.textContent = "○ Checking…";
+    else if (inspInfo && inspInfo.is_available === true) inspStat.textContent = "● Online";
+    else inspStat.textContent = "○ Unavailable";
+  }
 
   if (workLogo) {
     workLogo.textContent = workMeta.logoText;
     workLogo.className = `agent-logo ${workMeta.logoClass}`;
   }
   if (workName) workName.textContent = workInfo?.name || workMeta.full;
-  if (workVer) workVer.textContent = workInfo?.version ? `v${workInfo.version}` : workMeta.cmd;
-  if (workStat) workStat.textContent = workInfo || cachedAgents.length === 0 ? "● Online" : "○ Standby";
+  if (workVer) {
+    const v = workInfo?.version;
+    workVer.textContent = (v && v !== "unknown" && v !== "not_installed") ? `v${v}` : (workInfo?.is_available ? workMeta.cmd : "Not installed");
+  }
+  if (workStat) {
+    if (!agentsLoaded) workStat.textContent = "○ Checking…";
+    else if (workInfo && workInfo.is_available === true) workStat.textContent = "● Online";
+    else workStat.textContent = "○ Unavailable";
+  }
 
   const matNegotiator = document.getElementById("matrixNegotiator");
   const matImpl = document.getElementById("matrixImplementer");
@@ -1239,7 +1312,7 @@ function renderAgentsCards() {
   const grid = document.getElementById("agentsCardsGrid");
   if (!grid) return;
   if (cachedAgents.length === 0) {
-    grid.innerHTML = `<div class="panel"><div class="empty">No coding CLI executables detected on host PATH.</div></div>`;
+    grid.innerHTML = `<div class="panel"><div class="empty">No coding CLI adapters registered.</div></div>`;
     return;
   }
 
@@ -1262,11 +1335,11 @@ function renderAgentsCards() {
               <p class="panel-desc">${escapeHtml(meta.role)}</p>
             </div>
           </div>
-          <span class="pill">Connected</span>
+          <span class="pill ${agent.is_available ? "" : "red"}">${agent.is_available ? "Connected" : "Missing"}</span>
         </div>
         <div class="kv"><span>Type</span><strong>${escapeHtml(agent.agent_type)}</strong></div>
-        <div class="kv"><span>Version</span><strong>v${escapeHtml(agent.version)}</strong></div>
-        <div class="kv"><span>Executable</span><code>${escapeHtml(agent.executable_path || "on PATH")}</code></div>
+        <div class="kv"><span>Version</span><strong>${(agent.version && agent.version !== "unknown" && agent.version !== "not_installed") ? `v${escapeHtml(agent.version)}` : (agent.is_available ? "—" : "Not installed")}</strong></div>
+        <div class="kv"><span>Executable</span><code>${escapeHtml(agent.executable_path || (agent.is_available ? "on PATH" : "Not found"))}</code></div>
         <div class="caps-list">
           ${caps.map((c) => `<span class="tag">${escapeHtml(c)}</span>`).join("")}
         </div>
@@ -1297,45 +1370,25 @@ function pickDefaultActiveTask(tasks) {
 async function fetchTasks() {
   try {
     const res = await fetch(`${API_BASE}/tasks`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const tasks = await res.json();
     cachedTasks = Array.isArray(tasks) ? tasks : [];
 
     const exists = cachedTasks.some((t) => t.id === activeTaskId);
     if (!exists) activeTaskId = pickDefaultActiveTask(cachedTasks);
 
-    updateTaskStatsAndSelectors();
+    updateTaskSelectors();
     renderOverviewTasks();
     if (currentView === "tasks") renderTasksTable();
     if (currentView === "reviews") renderReviewsView();
     if (activeTaskId) await refreshActiveTaskWorkspace();
     else renderIdleDualStreams();
   } catch {
-    // Non-fatal
+    // Endpoint error: neutral view only
   }
 }
 
-function updateTaskStatsAndSelectors() {
-  const activeCount = cachedTasks.filter((t) => ["RUNNING", "AWAITING_APPROVAL", "PENDING"].includes(t.status)).length;
-  const runningCount = cachedTasks.filter((t) => t.status === "RUNNING").length;
-  const waitCount = cachedTasks.filter((t) => t.status === "AWAITING_APPROVAL").length;
-  const completedCount = cachedTasks.filter((t) => t.status === "COMPLETED").length;
-
-  const statActive = document.getElementById("statActive");
-  const statActiveFoot = document.getElementById("statActiveFoot");
-  const statComp = document.getElementById("statCompleted");
-  const statCompFoot = document.getElementById("statCompletedFoot");
-  const navTasksCount = document.getElementById("navTasksCount");
-
-  if (statActive) statActive.textContent = String(activeCount).padStart(2, "0");
-  if (statActiveFoot) statActiveFoot.textContent = `${runningCount} running · ${waitCount} awaiting decision`;
-  if (statComp) statComp.textContent = String(completedCount).padStart(2, "0");
-  if (statCompFoot) statCompFoot.textContent = `${cachedTasks.length} total tasks tracked`;
-  if (navTasksCount) navTasksCount.textContent = String(cachedTasks.length);
-
-  // Sync top system status badge
-  updateGlobalStatusPill(runningCount, waitCount);
-
-  // Sync both task dropdowns cleanly
+function updateTaskSelectors() {
   const optionsHtml = cachedTasks.length === 0
     ? `<option value="">No tasks submitted yet</option>`
     : cachedTasks.map((t) => `<option value="${escapeHtml(t.id)}">[${escapeHtml(t.status)}] ${escapeHtml(t.title)}</option>`).join("");
@@ -1349,11 +1402,26 @@ function updateTaskStatsAndSelectors() {
   });
 }
 
+// (KPIs now driven by fetchDiagnostics from exact DB totals; selectors handled by updateTaskSelectors.)
+
 function updateGlobalStatusPill(runningCount, waitCount) {
   const pill = document.getElementById("systemStatus");
   if (!pill) return;
-  if (cachedErrors.length > 0) {
-    pill.textContent = `● ${cachedErrors.length} Active Error${cachedErrors.length === 1 ? "" : "s"}`;
+  if (!apiOnline) {
+    pill.textContent = "● Backend Offline";
+    pill.className = "pill red";
+    return;
+  }
+  if (!dbConnected) {
+    pill.textContent = "● Degraded";
+    pill.className = "pill amber";
+    return;
+  }
+  const activeErrors = (cachedDiagnostics && typeof cachedDiagnostics.active_errors === "number")
+    ? cachedDiagnostics.active_errors
+    : (cachedErrors ? cachedErrors.length : 0);
+  if (activeErrors > 0) {
+    pill.textContent = `● ${activeErrors} Active Error${activeErrors === 1 ? "" : "s"}`;
     pill.className = "pill red";
   } else if (waitCount > 0) {
     pill.textContent = `⏸ ${waitCount} Decision${waitCount === 1 ? "" : "s"} Pending`;
@@ -2054,6 +2122,7 @@ async function fetchApprovals() {
   try {
     if (pendingDecisionInFlight) return;
     const res = await fetch(`${API_BASE}/approvals`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const approvals = await res.json();
     cachedApprovals = Array.isArray(approvals) ? approvals : [];
 
@@ -2169,7 +2238,7 @@ async function decideApproval(approvalId, decision, btnEl = null) {
     const res = await fetch(`${API_BASE}/approvals/${approvalId}/decide`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision, decided_by: "Ahmed", reason: note || null }),
+      body: JSON.stringify({ decision, decided_by: (prefs.operatorName || "Operator"), reason: note || null }),
     });
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({}));
@@ -2224,26 +2293,15 @@ function renderReviewsView() {
 async function fetchErrors() {
   try {
     const res = await fetch(`${API_BASE}/errors?unresolved_only=true`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const errors = await res.json();
     cachedErrors = Array.isArray(errors) ? errors : [];
-
-    const navErr = document.getElementById("navErrorsCount");
-    const topErr = document.getElementById("errorPillCount");
-    const badge = document.getElementById("errorCountBadge");
-    if (navErr) navErr.textContent = String(cachedErrors.length);
-    if (topErr) topErr.textContent = String(cachedErrors.length);
-    if (badge) {
-      badge.textContent = `${cachedErrors.length} active`;
-      badge.className = cachedErrors.length > 0 ? "pill red" : "pill";
-    }
-    const statHealth = document.getElementById("statHealth");
-    const statHealthFoot = document.getElementById("statHealthFoot");
-    if (statHealth) statHealth.textContent = cachedErrors.length === 0 ? "100%" : "Alert";
-    if (statHealthFoot) statHealthFoot.textContent = `${cachedErrors.length} unresolved error${cachedErrors.length === 1 ? "" : "s"}`;
-
+    // Counts are driven by diagnostics (exact); here only render the capped list view.
     renderErrors();
   } catch {
-    // Non-fatal
+    // Endpoint error: neutral view only, do not flip global offline
+    const container = document.getElementById("errorCenterList");
+    if (container) container.innerHTML = `<div class="empty">Unable to load errors.</div>`;
   }
 }
 
@@ -2300,9 +2358,11 @@ function renderErrors() {
 
 async function resolveError(id) {
   try {
-    await fetch(`${API_BASE}/errors/${id}/resolve`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/errors/${id}/resolve`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     lastErrorsFingerprint = null;
     await fetchErrors();
+    await fetchDiagnostics();
     showToast(`Dismissed error #${id}`);
   } catch {
     // Non-fatal
@@ -2311,9 +2371,11 @@ async function resolveError(id) {
 
 async function clearAllErrors() {
   try {
-    await fetch(`${API_BASE}/errors/clear`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/errors/clear`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     lastErrorsFingerprint = null;
     await fetchErrors();
+    await fetchDiagnostics();
     showToast("Cleared all unresolved error notifications.");
   } catch {
     // Non-fatal
@@ -2323,6 +2385,7 @@ async function clearAllErrors() {
 async function fetchAudit() {
   try {
     const res = await fetch(`${API_BASE}/audit?limit=40`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const logs = await res.json();
     cachedAudit = Array.isArray(logs) ? logs : [];
     renderOverviewActivity();
@@ -2563,13 +2626,29 @@ function formatDiff(diffText) {
 async function fetchDiagnostics() {
   try {
     const res = await fetch(`${API_BASE}/diagnostics`);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     cachedDiagnostics = await res.json();
+    apiOnline = true;
     const d = cachedDiagnostics;
+    if (typeof d.database_connected === "boolean") dbConnected = d.database_connected;
 
+    const tc = d.task_counts || {};
+    const get = (k) => (tc && tc[k] != null) ? Number(tc[k]) : 0;
     const total = d.total_tasks || 0;
     const failed = d.failed_tasks || 0;
-    const passPct = total > 0 ? Math.round(((total - failed) / total) * 100) : 100;
+    const completed = get("COMPLETED");
+    const running = get("RUNNING");
+    const wait = get("AWAITING_APPROVAL");
+    const pending = get("PENDING");
+    const cancelled = get("CANCELLED");
+    const timedOut = get("TIMED_OUT");
+    const active = pending + running + wait;
+    const terminal = completed + failed + cancelled + timedOut;
+    const completionRate = terminal > 0 ? Math.round((completed / terminal) * 100) : 0;
+
+    const registered = d.registered_agents || 0;
+    const availableCount = d.available_agents != null ? d.available_agents : (d.agents || []).filter((a) => a.available === true).length;
+    const activeErrors = d.active_errors || 0;
 
     // Overview diagnostics mini-card
     const ovBadge = document.getElementById("ovHealthBadge");
@@ -2578,14 +2657,16 @@ async function fetchDiagnostics() {
     const ovPass = document.getElementById("ovPassRate");
     const ovPassBar = document.getElementById("ovPassBar");
     if (ovBadge) {
-      ovBadge.textContent = d.status === "healthy" ? "Healthy" : "Degraded";
-      ovBadge.className = d.status === "healthy" ? "pill" : "pill red";
+      const label = !dbConnected ? "Offline" : (d.status === "healthy" ? "Healthy" : "Degraded");
+      ovBadge.textContent = label;
+      ovBadge.className = (label === "Healthy") ? "pill" : "pill red";
     }
-    const cliCnt = (d.agents || []).length;
-    if (ovAgents) ovAgents.textContent = `${cliCnt} detected`;
-    if (ovAgentsBar) ovAgentsBar.style.width = `${Math.min(100, Math.round((cliCnt / 4) * 100))}%`;
-    if (ovPass) ovPass.textContent = `${passPct}% (${total - failed}/${total})`;
-    if (ovPassBar) ovPassBar.style.width = `${passPct}%`;
+    if (ovAgents) ovAgents.textContent = `${availableCount} detected`;
+    if (ovAgentsBar) ovAgentsBar.style.width = registered > 0
+      ? `${Math.min(100, Math.round((availableCount / registered) * 100))}%`
+      : "0%";
+    if (ovPass) ovPass.textContent = terminal > 0 ? `${completionRate}% (${completed}/${terminal})` : "—";
+    if (ovPassBar) ovPassBar.style.width = `${terminal > 0 ? completionRate : 0}%`;
 
     // Dedicated Diagnostics view
     const dbVal = document.getElementById("diagDbValue");
@@ -2597,12 +2678,12 @@ async function fetchDiagnostics() {
     const statFoot = document.getElementById("diagStatusFoot");
     const tbody = document.getElementById("diagCliTbody");
 
-    if (dbVal) dbVal.textContent = "OK";
-    if (dbFoot) dbFoot.textContent = d.database || "postgresql";
-    if (cliVal) cliVal.textContent = String(cliCnt);
+    if (dbVal) dbVal.textContent = dbConnected ? "Connected" : "Offline";
+    if (dbFoot) dbFoot.textContent = d.database || "";
+    if (cliVal) cliVal.textContent = String(availableCount);
     if (totVal) totVal.textContent = String(total);
     if (failFoot) failFoot.textContent = `${failed} failed runs`;
-    if (errVal) errVal.textContent = String(d.active_errors || 0);
+    if (errVal) errVal.textContent = String(activeErrors);
     if (statFoot) statFoot.textContent = `Status: ${d.status}`;
 
     if (tbody) {
@@ -2610,13 +2691,53 @@ async function fetchDiagnostics() {
         <tr>
           <td><strong>${escapeHtml(a.name)}</strong></td>
           <td><code>${escapeHtml(a.type)}</code></td>
-          <td>v${escapeHtml(a.version)}</td>
-          <td><code>${escapeHtml(a.executable || "on PATH")}</code></td>
-          <td><span class="pill">${a.available ? "Available" : "Missing"}</span></td>
+          <td>${(a.version && a.version !== "unknown" && a.version !== "not_installed") ? `v${escapeHtml(a.version)}` : (a.available ? "—" : "Not installed")}</td>
+          <td><code>${escapeHtml(a.executable || (a.available ? "on PATH" : "Not found"))}</code></td>
+          <td><span class="pill ${a.available ? "" : "red"}">${a.available ? "Available" : "Missing"}</span></td>
         </tr>
       `).join("") || `<tr><td colspan="5" class="empty">No host CLIs detected.</td></tr>`;
     }
-  } catch {
-    // Non-fatal
+
+    // Overview KPIs from exact DB totals (diagnostics is source of truth)
+    const statActive = document.getElementById("statActive");
+    const statActiveFoot = document.getElementById("statActiveFoot");
+    const statComp = document.getElementById("statCompleted");
+    const statCompFoot = document.getElementById("statCompletedFoot");
+    const navTasksCount = document.getElementById("navTasksCount");
+    const statHealth = document.getElementById("statHealth");
+    const statHealthFoot = document.getElementById("statHealthFoot");
+
+    if (statActive) statActive.textContent = String(active).padStart(2, "0");
+    if (statActiveFoot) statActiveFoot.textContent = `${running} running · ${wait} awaiting decision`;
+    if (statComp) statComp.textContent = String(completed).padStart(2, "0");
+    if (statCompFoot) statCompFoot.textContent = `${total} total tasks tracked`;
+    if (navTasksCount) navTasksCount.textContent = String(total);
+
+    if (statHealth) {
+      if (!dbConnected) statHealth.textContent = "Offline";
+      else statHealth.textContent = activeErrors === 0 ? "Healthy" : "Degraded";
+    }
+    if (statHealthFoot) {
+      if (!dbConnected) statHealthFoot.textContent = "Database unavailable";
+      else statHealthFoot.textContent = `${activeErrors} unresolved error${activeErrors === 1 ? "" : "s"}`;
+    }
+
+    // Error counts from diagnostics (exact, not capped list)
+    const navErr = document.getElementById("navErrorsCount");
+    const topErr = document.getElementById("errorPillCount");
+    const badge = document.getElementById("errorCountBadge");
+    if (navErr) navErr.textContent = String(activeErrors);
+    if (topErr) topErr.textContent = String(activeErrors);
+    if (badge) {
+      badge.textContent = `${activeErrors} active`;
+      badge.className = activeErrors > 0 ? "pill red" : "pill";
+    }
+
+    // Keep system status pill in sync if no errors? Let updateGlobalStatusPill use cachedErrors? We'll call with running/wait
+    updateGlobalStatusPill(running, wait);
+  } catch (err) {
+    // Endpoint error: update only this view to neutral/error, not global offline
+    const ovBadge = document.getElementById("ovHealthBadge");
+    if (ovBadge) { ovBadge.textContent = "Degraded"; ovBadge.className = "pill red"; }
   }
 }
