@@ -1768,6 +1768,11 @@ function renderIdleDualStreams() {
     const el = document.getElementById(id);
     if (el) el.innerHTML = `<div class="empty">Create or select a task to stream worker actions here.</div>`;
   });
+  const workerPref = document.getElementById("overviewWorkerSelect")?.value || prefs.defaultWorker || "OPENCODE";
+  updateAgentTitleAndDot("inspectorLiveDot", "inspectorAreaTitleText", "ANTIGRAVITY", false);
+  updateAgentTitleAndDot("workerLiveDot", "workerAreaTitleText", workerPref, false);
+  updateAgentTitleAndDot("streamsInspectorLiveDot", "streamsInspectorTitleText", "ANTIGRAVITY", false);
+  updateAgentTitleAndDot("streamsWorkerLiveDot", "streamsWorkerTitleText", workerPref, false);
 }
 
 function renderStagePipeline(containerId, workflow) {
@@ -1954,7 +1959,35 @@ function updateStreamContainer(containerId, paneKey, events, supplementHtml, sup
   }
 }
 
-function updateStreamPill(pillId, isLeft, events, workflow, task) {
+function isAgentPaneWorking(isLeft, agentKey, events, workflow, task) {
+  if (task?.status !== "RUNNING") return false;
+  if (workflow) {
+    const phase = workflow.current_phase || "";
+    const inPhase = (isLeft && ["INSPECTION", "VERIFICATION"].includes(phase))
+      || (!isLeft && ["NEGOTIATION", "EXECUTION"].includes(phase));
+    return inPhase || events.some((ev) => ev.status === "running");
+  }
+  if (events.some((ev) => ev.status === "running")) return true;
+  return task.assigned_agent ? task.assigned_agent === agentKey : !isLeft;
+}
+
+function updateAgentTitleAndDot(dotId, textId, agentKey, isWorking) {
+  const meta = getAgentMeta(agentKey);
+  const textEl = document.getElementById(textId);
+  if (textEl) {
+    const nextTitle = `${meta.short} Action Area`;
+    if (textEl.textContent !== nextTitle) textEl.textContent = nextTitle;
+  }
+  const dotEl = document.getElementById(dotId);
+  if (dotEl) {
+    const known = ["ANTIGRAVITY", "OPENCODE", "CLAUDE_CODE", "QWEN_CODE"];
+    const colorClass = known.includes(agentKey) ? `agent-dot-${agentKey}` : "agent-dot-OTHER";
+    const nextClass = `agent-live-dot ${colorClass}${isWorking ? " is-working" : ""}`;
+    if (dotEl.className !== nextClass) dotEl.className = nextClass;
+  }
+}
+
+function updateStreamPill(pillId, isLeft, agentKey, events, workflow, task) {
   const pill = document.getElementById(pillId);
   if (!pill) return;
 
@@ -1962,9 +1995,9 @@ function updateStreamPill(pillId, isLeft, events, workflow, task) {
   const phase = workflow?.current_phase || "";
   const isPhaseActive = (isLeft && ["INSPECTION", "VERIFICATION"].includes(phase))
     || (!isLeft && ["NEGOTIATION", "EXECUTION"].includes(phase));
-  const hasRunningEv = taskStatus === "RUNNING" && events.some((ev) => ev.status === "running");
+  const isWorking = isAgentPaneWorking(isLeft, agentKey, events, workflow, task);
 
-  if (taskStatus === "RUNNING" && (hasRunningEv || isPhaseActive)) {
+  if (taskStatus === "RUNNING" && isWorking) {
     pill.textContent = "Streaming";
     pill.className = "pill-mini running";
   } else if (taskStatus === "RUNNING") {
@@ -2028,18 +2061,6 @@ async function refreshActiveTaskWorkspace() {
       || (task?.assigned_agent && task.assigned_agent !== inspectorKey ? task.assigned_agent : null)
       || (dropdownWorker && dropdownWorker !== inspectorKey ? dropdownWorker : "OPENCODE");
 
-    const inspMeta = getAgentMeta(inspectorKey);
-    const workMeta = getAgentMeta(workerKey);
-
-    ["inspectorAreaTitle", "streamsInspectorTitle"].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = `${inspMeta.icon} ${inspMeta.short} Action Area`;
-    });
-    ["workerAreaTitle", "streamsWorkerTitle"].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = `${workMeta.icon} ${workMeta.short} Action Area`;
-    });
-
     const leftEvents = [];
     const rightEvents = [];
     const sameAgent = inspectorKey === workerKey;
@@ -2058,6 +2079,13 @@ async function refreshActiveTaskWorkspace() {
         rightEvents.push(ev);
       }
     });
+
+    const leftWorking = isAgentPaneWorking(true, inspectorKey, leftEvents, workflow, task);
+    const rightWorking = isAgentPaneWorking(false, workerKey, rightEvents, workflow, task);
+    updateAgentTitleAndDot("inspectorLiveDot", "inspectorAreaTitleText", inspectorKey, leftWorking);
+    updateAgentTitleAndDot("workerLiveDot", "workerAreaTitleText", workerKey, rightWorking);
+    updateAgentTitleAndDot("streamsInspectorLiveDot", "streamsInspectorTitleText", inspectorKey, leftWorking);
+    updateAgentTitleAndDot("streamsWorkerLiveDot", "streamsWorkerTitleText", workerKey, rightWorking);
 
     let leftSupHtml = "";
     let rightSupHtml = "";
@@ -2102,14 +2130,14 @@ async function refreshActiveTaskWorkspace() {
 
     updateStreamContainer("inspectorActionStream", "OVL", leftEvents, leftSupHtml, leftFp, true);
     updateStreamContainer("workerActionStream", "OVR", rightEvents, rightSupHtml, rightFp, false);
-    updateStreamPill("inspectorStatusPill", true, leftEvents, workflow, task);
-    updateStreamPill("workerStatusPill", false, rightEvents, workflow, task);
+    updateStreamPill("inspectorStatusPill", true, inspectorKey, leftEvents, workflow, task);
+    updateStreamPill("workerStatusPill", false, workerKey, rightEvents, workflow, task);
 
     if (currentView === "messages") {
       updateStreamContainer("streamsInspectorFeed", "MSL", leftEvents, leftSupHtml, leftFp, true);
       updateStreamContainer("streamsWorkerFeed", "MSR", rightEvents, rightSupHtml, rightFp, false);
-      updateStreamPill("streamsInspectorPill", true, leftEvents, workflow, task);
-      updateStreamPill("streamsWorkerPill", false, rightEvents, workflow, task);
+      updateStreamPill("streamsInspectorPill", true, inspectorKey, leftEvents, workflow, task);
+      updateStreamPill("streamsWorkerPill", false, workerKey, rightEvents, workflow, task);
     }
   } catch {
     // Non-fatal

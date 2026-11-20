@@ -893,11 +893,51 @@ h1 {
 }
 
 .stream-pane-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 0;
   font-size: 12.5px;
   font-weight: 700;
+}
+
+.stream-pane-title > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-live-dot {
+  --dot-color: #91aaff;
+  inline-size: 11px;
+  block-size: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: radial-gradient(circle at 35% 35%, rgb(255 255 255 / 0.55), var(--dot-color) 65%);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.14);
+}
+
+.agent-dot-ANTIGRAVITY { --dot-color: #b88cff; }
+.agent-dot-OPENCODE { --dot-color: #5be59b; }
+.agent-dot-CLAUDE_CODE { --dot-color: #ffae57; }
+.agent-dot-QWEN_CODE { --dot-color: #5cc8ff; }
+.agent-dot-OTHER { --dot-color: #91aaff; }
+
+.agent-live-dot.is-working {
+  animation: agent-dot-blink 0.95s ease-in-out infinite;
+}
+
+@keyframes agent-dot-blink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1.08);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--dot-color) 35%, transparent), 0 0 10px var(--dot-color);
+  }
+  50% {
+    opacity: 0.18;
+    transform: scale(0.92);
+    box-shadow: 0 0 0 1px transparent;
+  }
 }
 
 .action-stream {
@@ -2083,5 +2123,10 @@ dialog::backdrop {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .agent-live-dot.is-working {
+    opacity: 1;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot-color) 45%, transparent);
   }
 }

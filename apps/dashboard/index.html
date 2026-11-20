@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" id="metaThemeColor" content="#0a1020">
   <title>Pairwise | AI Coding Command Center</title>
-  <link rel="stylesheet" href="styles.css?v=20261120q">
+  <link rel="stylesheet" href="styles.css?v=20261120r">
 </head>
 <body>
   <a href="#mainContent" class="skip-link visually-hidden">Skip to workspace</a>
@@ -231,7 +231,10 @@
               <div class="dual-stream-grid">
                 <div class="stream-pane-card">
                   <div class="stream-pane-head">
-                    <span id="inspectorAreaTitle" class="stream-pane-title">🟣 Antigravity Action Area</span>
+                    <span id="inspectorAreaTitle" class="stream-pane-title">
+                      <span class="agent-live-dot agent-dot-ANTIGRAVITY" id="inspectorLiveDot" aria-hidden="true"></span>
+                      <span id="inspectorAreaTitleText">Antigravity Action Area</span>
+                    </span>
                     <span class="pill-mini" id="inspectorStatusPill">Idle</span>
                   </div>
                   <div id="inspectorActionStream" class="scroll-pane action-stream">
@@ -241,7 +244,10 @@
 
                 <div class="stream-pane-card">
                   <div class="stream-pane-head">
-                    <span id="workerAreaTitle" class="stream-pane-title">🟢 OpenCode Action Area</span>
+                    <span id="workerAreaTitle" class="stream-pane-title">
+                      <span class="agent-live-dot agent-dot-OPENCODE" id="workerLiveDot" aria-hidden="true"></span>
+                      <span id="workerAreaTitleText">OpenCode Action Area</span>
+                    </span>
                     <span class="pill-mini" id="workerStatusPill">Idle</span>
                   </div>
                   <div id="workerActionStream" class="scroll-pane action-stream">
@@ -507,7 +513,10 @@
         <div class="grid view-grid">
           <div class="panel">
             <div class="panel-head">
-              <h2 class="panel-title" id="streamsInspectorTitle">🟣 Antigravity Action Area</h2>
+              <h2 class="panel-title stream-pane-title" id="streamsInspectorTitle">
+                <span class="agent-live-dot agent-dot-ANTIGRAVITY" id="streamsInspectorLiveDot" aria-hidden="true"></span>
+                <span id="streamsInspectorTitleText">Antigravity Action Area</span>
+              </h2>
               <span class="pill-mini" id="streamsInspectorPill">Idle</span>
             </div>
             <div id="streamsInspectorFeed" class="scroll-pane tall-stream">
@@ -517,7 +526,10 @@
 
           <div class="panel">
             <div class="panel-head">
-              <h2 class="panel-title" id="streamsWorkerTitle">🟢 OpenCode Action Area</h2>
+              <h2 class="panel-title stream-pane-title" id="streamsWorkerTitle">
+                <span class="agent-live-dot agent-dot-OPENCODE" id="streamsWorkerLiveDot" aria-hidden="true"></span>
+                <span id="streamsWorkerTitleText">OpenCode Action Area</span>
+              </h2>
               <span class="pill-mini" id="streamsWorkerPill">Idle</span>
             </div>
             <div id="streamsWorkerFeed" class="scroll-pane tall-stream">
@@ -915,6 +927,6 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=20261120q"></script>
+  <script src="app.js?v=20261120r"></script>
 </body>
 </html>
