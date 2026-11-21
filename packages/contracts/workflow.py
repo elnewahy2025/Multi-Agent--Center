@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from packages.contracts.enums import AgentType
 
@@ -29,6 +29,12 @@ class WorkflowMessage(BaseModel):
     content: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+    @model_validator(mode="after")
+    def _ensure_utc(self) -> "WorkflowMessage":
+        if self.created_at and self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=timezone.utc)
+        return self
+
 
 class WorkflowRunRead(BaseModel):
     """State of an ongoing or completed collaborative workflow."""
@@ -43,3 +49,11 @@ class WorkflowRunRead(BaseModel):
     messages: List[WorkflowMessage] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _ensure_utc(self) -> "WorkflowRunRead":
+        if self.created_at and self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=timezone.utc)
+        if self.updated_at and self.updated_at.tzinfo is None:
+            self.updated_at = self.updated_at.replace(tzinfo=timezone.utc)
+        return self

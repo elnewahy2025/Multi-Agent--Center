@@ -5,8 +5,19 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+
+def iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    """Serialize a naive-UTC or aware datetime as an explicit UTC ISO-8601 string ('...Z')."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
 
 from services.agent_bridge.streaming import ActivityEvent
 from services.orchestrator.db import AgentEventModel, get_db_session
@@ -82,7 +93,7 @@ def list_events(task_id: str, after_id: int = 0, since: Optional[datetime] = Non
                 "id": r.id, "run_id": r.run_id, "agent": r.agent, "phase": r.phase,
                 "kind": r.kind, "tool": r.tool, "status": r.status, "title": r.title,
                 "content": r.content, "duration_seconds": r.duration_seconds,
-                "created_at": r.created_at.isoformat(), "updated_at": r.updated_at.isoformat(),
+                "created_at": iso_utc(r.created_at), "updated_at": iso_utc(r.updated_at),
             }
             for r in rows
         ]

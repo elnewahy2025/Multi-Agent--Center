@@ -384,5 +384,31 @@ class TestOrchestrator(unittest.TestCase):
                     self.assertIn(st, data["task_counts"])
                     self.assertEqual(data["task_counts"][st], 0)
 
+    def test_api_timestamps_serialize_with_utc_timezone_marker(self):
+        create_res = self.client.post(
+            "/tasks",
+            json={
+                "title": "UTC Timestamp Check",
+                "description": "Verify API timestamps include explicit UTC Z or +00:00 suffix for local time conversion.",
+                "use_worktree": False,
+            },
+        )
+        self.assertEqual(create_res.status_code, 200)
+        task_data = create_res.json()
+        self.assertTrue(
+            task_data["created_at"].endswith("Z") or task_data["created_at"].endswith("+00:00"),
+            f"Expected explicit UTC suffix on task.created_at, got {task_data['created_at']!r}",
+        )
+        audit_res = self.client.get("/audit")
+        self.assertEqual(audit_res.status_code, 200)
+        audits = audit_res.json()
+        self.assertGreater(len(audits), 0)
+        self.assertTrue(
+            audits[0]["created_at"].endswith("Z") or audits[0]["created_at"].endswith("+00:00"),
+            f"Expected explicit UTC suffix on audit.created_at, got {audits[0]['created_at']!r}",
+        )
+        self.client.delete(f"/tasks/{task_data['id']}")
+
+
 if __name__ == "__main__":
     unittest.main()

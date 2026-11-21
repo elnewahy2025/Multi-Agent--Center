@@ -37,7 +37,7 @@ from services.orchestrator.db import (
     init_db,
 )
 from services.orchestrator.engine import TaskOrchestrator
-from services.orchestrator.events import list_events
+from services.orchestrator.events import iso_utc, list_events
 from services.orchestrator.workflows import CollaborativeWorkflowEngine
 
 app = FastAPI(
@@ -260,8 +260,8 @@ def get_task_runs(task_id: str) -> List[Dict[str, Any]]:
                 "error_reason": r.error_reason,
                 "stdout": r.stdout or "",
                 "stderr": r.stderr or "",
-                "started_at": r.started_at.isoformat() if r.started_at else None,
-                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "started_at": iso_utc(r.started_at),
+                "completed_at": iso_utc(r.completed_at),
             }
             for r in runs
         ]
@@ -322,7 +322,7 @@ def get_task_files(task_id: str) -> Dict[str, Any]:
                 "status": (ev.status or "done").upper(),
                 "output": (ev.content or "")[:1500],
                 "duration_seconds": ev.duration_seconds,
-                "updated_at": ev.updated_at.isoformat(),
+                "updated_at": iso_utc(ev.updated_at),
             }
             for ev in tool_events
         ]
@@ -428,7 +428,7 @@ def list_approvals() -> List[Dict[str, Any]]:
                 "command_or_path": a.command_or_path,
                 "description": a.description,
                 "risk_level": a.risk_level,
-                "requested_at": a.requested_at.isoformat(),
+                "requested_at": iso_utc(a.requested_at),
             }
             for a in records
         ]
@@ -446,7 +446,7 @@ def list_audit_trail(limit: int = 50) -> List[Dict[str, Any]]:
                 "run_id": log.run_id,
                 "event_type": log.event_type,
                 "message": log.message,
-                "created_at": log.created_at.isoformat(),
+                "created_at": iso_utc(log.created_at),
             }
             for log in logs
         ]
@@ -471,7 +471,7 @@ def list_errors(unresolved_only: bool = True, limit: int = 50) -> List[Dict[str,
                 "message": e.message,
                 "stderr": e.stderr,
                 "resolved": e.resolved,
-                "created_at": e.created_at.isoformat(),
+                "created_at": iso_utc(e.created_at),
             }
             for e in errors
         ]

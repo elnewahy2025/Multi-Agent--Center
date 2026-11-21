@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, model_validator
 
@@ -170,6 +170,16 @@ class TaskRead(BaseModel):
     updated_at: datetime
     completed_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _ensure_utc_timestamps(self) -> "TaskRead":
+        if self.created_at and self.created_at.tzinfo is None:
+            self.created_at = self.created_at.replace(tzinfo=timezone.utc)
+        if self.updated_at and self.updated_at.tzinfo is None:
+            self.updated_at = self.updated_at.replace(tzinfo=timezone.utc)
+        if self.completed_at and self.completed_at.tzinfo is None:
+            self.completed_at = self.completed_at.replace(tzinfo=timezone.utc)
+        return self
 
 
 class TaskUpdate(BaseModel):

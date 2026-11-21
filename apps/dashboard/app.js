@@ -247,6 +247,29 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+function parseServerDate(isoStr) {
+  if (!isoStr) return null;
+  const s = String(isoStr).trim();
+  if (!s) return null;
+  const hasTz = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  const d = new Date(hasTz ? s : `${s}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatLocalDateTime(isoStr, { includeDate = true } = {}) {
+  const d = parseServerDate(isoStr);
+  if (!d) return "—";
+  if (!includeDate) return d.toLocaleTimeString();
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function isImeComposing(event) {
   return Boolean(event && (event.isComposing || event.keyCode === 229));
 }
@@ -1461,7 +1484,7 @@ function renderOverviewTasks() {
           <div class="task-foot">
             <span class="tag ${taskStatusTagClass(t.status)}">${escapeHtml(t.status)}</span>
             <span class="tag">${escapeHtml(teamText)}</span>
-            <span class="muted" style="font-size:11px;">${new Date(t.created_at).toLocaleTimeString()}</span>
+            <span class="muted" style="font-size:11px;">${escapeHtml(formatLocalDateTime(t.created_at))}</span>
             <button type="button" class="btn btn-sm" style="margin-inline-start:auto;" data-focus-overview="${escapeHtml(t.id)}" aria-label="Stream task ${escapeHtml(t.title)}">Stream</button>
           </div>
         </div>
@@ -1525,7 +1548,7 @@ function renderTasksTable() {
         <td><span class="tag ${taskStatusTagClass(t.status)}">${escapeHtml(t.status)}</span></td>
         <td>${teamText}</td>
         <td><code>${wt}</code></td>
-        <td>${new Date(t.created_at).toLocaleTimeString()}</td>
+        <td>${escapeHtml(formatLocalDateTime(t.created_at))}</td>
         <td><div class="row-actions">${actions}</div></td>
       </tr>
     `;
@@ -2366,7 +2389,7 @@ function renderErrors() {
           </details>
         ` : ""}
         <div class="error-entry-header" style="font-size:11.5px; color:var(--muted);">
-          <span>Task: <code>${escapeHtml(err.task_id || "System")}</code> &bull; ${new Date(err.created_at).toLocaleTimeString()}</span>
+          <span>Task: <code>${escapeHtml(err.task_id || "System")}</code> &bull; ${escapeHtml(formatLocalDateTime(err.created_at))}</span>
           ${err.task_id ? `<button type="button" class="btn btn-sm" data-err-focus="${escapeHtml(err.task_id)}">Inspect Stream ➔</button>` : ""}
         </div>
       </div>
@@ -2435,7 +2458,7 @@ function renderOverviewActivity() {
       <div class="activity-icon" aria-hidden="true">${escapeHtml((l.event_type || "S").slice(0, 1))}</div>
       <div>
         <div class="activity-text"><strong>${escapeHtml(l.event_type)}</strong> &middot; ${escapeHtml(l.message)}</div>
-        <div class="activity-time">${new Date(l.created_at).toLocaleTimeString()}</div>
+        <div class="activity-time">${escapeHtml(formatLocalDateTime(l.created_at))}</div>
       </div>
     </div>
   `).join("");
@@ -2462,16 +2485,16 @@ function renderActivityTimeline() {
       <div class="activity-icon" aria-hidden="true">${escapeHtml((l.event_type || "S").slice(0, 1))}</div>
       <div>
         <div class="activity-text"><strong>[${escapeHtml(l.event_type)}]</strong> ${escapeHtml(l.message)}</div>
-        <div class="activity-time">${new Date(l.created_at).toLocaleTimeString()} ${l.task_id ? `&middot; ${escapeHtml(l.task_id)}` : ""}</div>
+        <div class="activity-time">${escapeHtml(formatLocalDateTime(l.created_at))} ${l.task_id ? `&middot; ${escapeHtml(l.task_id)}` : ""}</div>
       </div>
     </div>
   `).join("");
 }
 
 function exportAuditCsv() {
-  const rows = ["Time,Event Type,Task ID,Message"];
+  const rows = ["Local Date & Time,UTC ISO,Event Type,Task ID,Message"];
   cachedAudit.forEach((l) => {
-    const row = [l.created_at, l.event_type, l.task_id || "", l.message]
+    const row = [formatLocalDateTime(l.created_at), l.created_at, l.event_type, l.task_id || "", l.message]
       .map((v) => `"${String(v || "").replace(/"/g, '""')}"`)
       .join(",");
     rows.push(row);
